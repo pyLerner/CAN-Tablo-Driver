@@ -7,8 +7,10 @@ sender_rx_id = 0x18EF1101
 [iso-tp]
 rx_flowcontrol_timeout = 5000
 rx_consecutive_frame_timeout = 5000
-stmin = 10
-blocksize = 8
+stmin = 1
+blocksize = 64
+use_stack_sleep_time = true
+loop_sleep_sec = 0.00001
 
 [logs]
 dir = "../logs"

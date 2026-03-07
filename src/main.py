@@ -89,6 +89,8 @@ class AppConfig:
     sender_tx_id: int
     sender_rx_id: int
     iso_tp_params: dict[str, int]
+    use_stack_sleep_time: bool
+    loop_sleep_sec: float
     logs_dir: Path
     log_filename: str
     log_backup_count: int
@@ -246,6 +248,8 @@ def load_app_config(config_path: Path) -> AppConfig:
         sender_tx_id=int(can_cfg.get("sender_tx_id", 0x18EF1001)),
         sender_rx_id=int(can_cfg.get("sender_rx_id", 0x18EF1101)),
         iso_tp_params=iso_tp_params,
+        use_stack_sleep_time=bool(iso_tp_cfg.get("use_stack_sleep_time", True)),
+        loop_sleep_sec=float(iso_tp_cfg.get("loop_sleep_sec", 0.0001)),
         logs_dir=resolve_path(base_dir, str(logs_cfg.get("dir", "./logs"))),
         log_filename=str(logs_cfg.get("file", "tablo.log")),
         log_backup_count=int(logs_cfg.get("count", 5)),
@@ -546,6 +550,8 @@ class CanIsoTpTransport:
         tx_id: int,
         rx_id: int,
         iso_tp_params: Optional[dict[str, int]] = None,
+        use_stack_sleep_time: bool = True,
+        loop_sleep_sec: float = 0.0001,
         on_receive: Optional[Callable[[bytes], None]] = None,
     ) -> None:
         if can is None or isotp is None:
@@ -575,17 +581,33 @@ class CanIsoTpTransport:
         )
 
         self.on_receive = on_receive
+        self.use_stack_sleep_time = use_stack_sleep_time
+        self.loop_sleep_sec = max(0.0, loop_sleep_sec)
         self._running = False
         self._rx_thread: Optional[threading.Thread] = None
         self._cb_thread: Optional[threading.Thread] = None
         self._rx_queue: "Queue[Optional[bytes]]" = Queue()
+
+    def _sleep_tick(self) -> None:
+        """
+        Пауза между итерациями обработки ISO-TP.
+
+        Если `use_stack_sleep_time=True`, используется рекомендованное библиотекой
+        значение `self.stack.sleep_time()`. Иначе применяется фиксированная пауза
+        `loop_sleep_sec` из конфигурации.
+        """
+        if self.use_stack_sleep_time:
+            sleep_value = self.stack.sleep_time()
+            time.sleep(max(0.0, float(sleep_value)))
+            return
+        time.sleep(self.loop_sleep_sec)
 
     def send(self, payload: bytes) -> None:
         """Отправляет один ISO-TP payload и дожидается завершения передачи."""
         self.stack.send(payload)
         while self.stack.transmitting():
             self.stack.process()
-            time.sleep(0.001)
+            self._sleep_tick()
 
     def start(self) -> None:
         """Запускает фоновый поток приема."""
@@ -606,7 +628,7 @@ class CanIsoTpTransport:
                 data = self.stack.recv()
                 if data is not None:
                     self._rx_queue.put(data)
-            time.sleep(0.001)
+            self._sleep_tick()
 
     def _callback_loop(self) -> None:
         """Обрабатывает декодированные payload из очереди в отдельном потоке."""
@@ -817,6 +839,10 @@ class MockController:
             image_path,
         )
 
+        LOGGER.info(
+            f"Получена байт строка:\n {payload_to_hex(payload=payload)}"
+        )
+
 
 # ============================================================
 # ДЕМО-СЦЕНАРИИ
@@ -835,6 +861,8 @@ def run_sender(config: AppConfig) -> None:
         tx_id=config.sender_tx_id,
         rx_id=config.sender_rx_id,
         iso_tp_params=config.iso_tp_params,
+        use_stack_sleep_time=config.use_stack_sleep_time,
+        loop_sleep_sec=config.loop_sleep_sec,
     ) as transport:
         tablo = RouteAndTwoLinesTablo(
             route_width=config.route_width,
@@ -849,7 +877,7 @@ def run_sender(config: AppConfig) -> None:
             transport=transport,
         )
         tablo.send_to_tablo(json_data)
-        time.sleep(0.5)
+        time.sleep(0.001)
     LOGGER.info("Отправка завершена")
 
 
@@ -869,10 +897,12 @@ def run_controller(config: AppConfig) -> None:
         tx_id=config.sender_rx_id,
         rx_id=config.sender_tx_id,
         iso_tp_params=config.iso_tp_params,
+        use_stack_sleep_time=config.use_stack_sleep_time,
+        loop_sleep_sec=config.loop_sleep_sec,
         on_receive=controller.on_receive,
     ):
         while True:
-            time.sleep(1)
+            time.sleep(0.1)
 
 
 def run_local_demo(config: AppConfig) -> None:
