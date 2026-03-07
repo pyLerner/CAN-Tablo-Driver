@@ -1,0 +1,12 @@
+[project]
+name = "can"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "can-isotp>=2.0.0",
+    "nuitka>=4.0.3",
+    "pillow>=12.1.1",
+    "python-can>=4.3.0",
+]

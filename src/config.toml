@@ -1,0 +1,31 @@
+[can]
+channel = "can0"
+bitrate = 500000
+sender_tx_id = 0x18EF1001
+sender_rx_id = 0x18EF1101
+
+[iso-tp]
+rx_flowcontrol_timeout = 5000
+rx_consecutive_frame_timeout = 5000
+stmin = 10
+blocksize = 8
+
+[logs]
+dir = "../logs"
+file = "tablo.log"
+count = 5
+max_size = 1048576
+
+[tabloRouteTwoStrings]
+route_width = 80
+route_text_scale_x = 0.5
+width = 192
+height = 64
+pad_left = 0
+pad_right = 0
+pad_top = 2
+pad_bottom = 2
+
+[TextIn]
+path = "../data/text-in.json"
+font = "../data/DejaVuSans.ttf"
