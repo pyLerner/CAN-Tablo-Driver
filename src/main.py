@@ -30,6 +30,7 @@ import math
 import threading
 import time
 import tomllib
+import types
 from queue import Empty, Queue
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -41,10 +42,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 try:
     import can
+    from can.io.canutils import CanutilsLogWriter
     import isotp
 except ImportError:  # pragma: no cover - полезно для локальной проверки без CAN-зависимостей
     can = None
     isotp = None
+    CanutilsLogWriter = None
 
 
 # ============================================================
@@ -86,6 +89,10 @@ class AppConfig:
 
     can_channel: str
     can_bitrate: int
+    slcan_tty_baudrate: int
+    slcan_sleep_after_open: float
+    slcan_read_timeout: float
+    slcan_open_timeout_sec: float
     sender_tx_id: int
     sender_rx_id: int
     iso_tp_params: dict[str, int]
@@ -93,6 +100,7 @@ class AppConfig:
     loop_sleep_sec: float
     logs_dir: Path
     log_filename: str
+    candump_log_path: Optional[Path]
     log_backup_count: int
     log_max_bytes: int
     route_width: int
@@ -241,17 +249,27 @@ def load_app_config(config_path: Path) -> AppConfig:
         "stmin": int(iso_tp_cfg.get("stmin", 10)),
         "blocksize": int(iso_tp_cfg.get("blocksize", 8)),
     }
+    logs_dir = resolve_path(base_dir, str(logs_cfg.get("dir", "./logs")))
+    candump_file = str(logs_cfg.get("candump_file", "../logs/candump.log")).strip()
+    candump_log_path = (
+        resolve_path(base_dir, candump_file) if candump_file else None
+    )
 
     return AppConfig(
         can_channel=str(can_cfg.get("channel", "can0")),
         can_bitrate=int(can_cfg.get("bitrate", 500_000)),
+        slcan_tty_baudrate=int(can_cfg.get("slcan_tty_baudrate", 115_200)),
+        slcan_sleep_after_open=float(can_cfg.get("slcan_sleep_after_open", 0.2)),
+        slcan_read_timeout=float(can_cfg.get("slcan_read_timeout", 0.05)),
+        slcan_open_timeout_sec=float(can_cfg.get("slcan_open_timeout_sec", 8.0)),
         sender_tx_id=int(can_cfg.get("sender_tx_id", 0x18EF1001)),
         sender_rx_id=int(can_cfg.get("sender_rx_id", 0x18EF1101)),
         iso_tp_params=iso_tp_params,
         use_stack_sleep_time=bool(iso_tp_cfg.get("use_stack_sleep_time", True)),
         loop_sleep_sec=float(iso_tp_cfg.get("loop_sleep_sec", 0.0001)),
-        logs_dir=resolve_path(base_dir, str(logs_cfg.get("dir", "./logs"))),
+        logs_dir=logs_dir,
         log_filename=str(logs_cfg.get("file", "tablo.log")),
+        candump_log_path=candump_log_path,
         log_backup_count=int(logs_cfg.get("count", 5)),
         log_max_bytes=int(logs_cfg.get("max_size", 1_048_576)),
         route_width=int(tablo_cfg.get("route_width", 80)),
@@ -536,6 +554,41 @@ class RectMaskPacket:
 # ============================================================
 
 
+class CandumpTeeLogger:
+    """
+    Логирует CAN кадры в формате, совместимом с `candump -L`.
+
+    Используется внутри одного процесса, чтобы не открывать /dev/ttyACM0
+    вторым приложением.
+    """
+
+    def __init__(self, log_path: Path, channel: str) -> None:
+        if CanutilsLogWriter is None:
+            raise RuntimeError("CanutilsLogWriter недоступен (python-can не установлен)")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        # Создаем файл сразу, даже если до первого кадра приложение завершится ошибкой.
+        log_path.touch(exist_ok=True)
+        self._writer = CanutilsLogWriter(str(log_path), channel=channel, append=True)
+        self._closed = False
+
+    def log_rx(self, msg: Any) -> None:
+        self._writer.on_message_received(msg)
+        self._writer.file.flush()
+
+    def log_tx(self, msg: Any) -> None:
+        tx_msg = msg.__copy__()
+        tx_msg.is_rx = False
+        tx_msg.timestamp = time.time()
+        self._writer.on_message_received(tx_msg)
+        self._writer.file.flush()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._writer.stop()
+        self._closed = True
+
+
 class CanIsoTpTransport:
     """
     Универсальный транспортный адаптер для передачи/приема ISO-TP поверх SocketCAN.
@@ -547,11 +600,16 @@ class CanIsoTpTransport:
         self,
         channel: str,
         bitrate: int,
+        slcan_tty_baudrate: int,
+        slcan_sleep_after_open: float,
+        slcan_read_timeout: float,
+        slcan_open_timeout_sec: float,
         tx_id: int,
         rx_id: int,
         iso_tp_params: Optional[dict[str, int]] = None,
         use_stack_sleep_time: bool = True,
         loop_sleep_sec: float = 0.0001,
+        candump_log_path: Optional[Path] = None,
         on_receive: Optional[Callable[[bytes], None]] = None,
     ) -> None:
         if can is None or isotp is None:
@@ -559,11 +617,41 @@ class CanIsoTpTransport:
                 "Для работы с CAN установите зависимости: python-can и can-isotp"
             )
 
-        self.bus = can.interface.Bus(
-            interface="socketcan",
-            channel=channel,
-            bitrate=bitrate,
+        self._candump_logger: Optional[CandumpTeeLogger] = None
+        if candump_log_path is not None:
+            try:
+                self._candump_logger = CandumpTeeLogger(candump_log_path, channel=channel)
+                LOGGER.info("CAN candump-лог включен: %s", candump_log_path)
+            except Exception as exc:
+                self._candump_logger = None
+                LOGGER.error("Не удалось включить candump-лог (%s): %s", candump_log_path, exc)
+
+        LOGGER.info(
+            "Открытие CAN интерфейса: slcan channel=%s bitrate=%d tty_baud=%d open_timeout=%.1fs",
+            channel,
+            bitrate,
+            slcan_tty_baudrate,
+            slcan_open_timeout_sec,
         )
+        try:
+            raw_bus = self._open_slcan_bus_with_timeout(
+                channel=channel,
+                bitrate=bitrate,
+                tty_baudrate=slcan_tty_baudrate,
+                sleep_after_open=slcan_sleep_after_open,
+                timeout=slcan_read_timeout,
+                open_timeout_sec=slcan_open_timeout_sec,
+            )
+        except Exception:
+            if self._candump_logger is not None:
+                self._candump_logger.close()
+            raise
+        LOGGER.info("CAN интерфейс открыт: %s", channel)
+
+        self.bus = raw_bus
+        if self._candump_logger is not None:
+            self._install_candump_hooks(self.bus, self._candump_logger)
+
         self.stack = isotp.CanStack(
             bus=self.bus,
             address=isotp.Address(isotp.AddressingMode.Normal_29bits, txid=tx_id, rxid=rx_id),
@@ -602,12 +690,86 @@ class CanIsoTpTransport:
             return
         time.sleep(self.loop_sleep_sec)
 
+    @staticmethod
+    def _install_candump_hooks(bus: Any, candump_logger: CandumpTeeLogger) -> None:
+        """
+        Добавляет логирование TX/RX, не меняя тип объекта шины.
+        Это важно: `isotp.CanStack` проверяет, что передан именно `BusABC`.
+        """
+        orig_send = bus.send
+        orig_recv = bus.recv
+
+        def send_with_log(self: Any, msg: Any, timeout: Optional[float] = None) -> Any:
+            candump_logger.log_tx(msg)
+            return orig_send(msg, timeout=timeout)
+
+        def recv_with_log(self: Any, timeout: Optional[float] = None) -> Any:
+            msg = orig_recv(timeout)
+            if msg is not None:
+                candump_logger.log_rx(msg)
+            return msg
+
+        bus.send = types.MethodType(send_with_log, bus)
+        bus.recv = types.MethodType(recv_with_log, bus)
+
+    @staticmethod
+    def _open_slcan_bus_with_timeout(
+        channel: str,
+        bitrate: int,
+        tty_baudrate: int,
+        sleep_after_open: float,
+        timeout: float,
+        open_timeout_sec: float,
+    ) -> Any:
+        result_queue: "Queue[tuple[str, Any]]" = Queue(maxsize=1)
+
+        def worker() -> None:
+            try:
+                bus_obj = can.interface.Bus(
+                    interface="slcan",
+                    channel=channel,
+                    bitrate=bitrate,
+                    tty_baudrate=tty_baudrate,
+                    sleep_after_open=sleep_after_open,
+                    timeout=timeout,
+                )
+                result_queue.put(("ok", bus_obj))
+            except Exception as exc:  # pragma: no cover - диагностическая ветка
+                result_queue.put(("err", exc))
+
+        open_thread = threading.Thread(target=worker, daemon=True)
+        open_thread.start()
+        open_thread.join(timeout=max(0.1, open_timeout_sec))
+
+        if open_thread.is_alive():
+            raise TimeoutError(
+                f"Таймаут открытия slcan интерфейса ({open_timeout_sec:.1f}s) "
+                f"для {channel}. Проверьте занятость порта и SLCAN-совместимость адаптера."
+            )
+
+        try:
+            status, value = result_queue.get_nowait()
+        except Empty as exc:  # pragma: no cover - защитная ветка
+            raise RuntimeError("Не удалось получить результат открытия slcan интерфейса") from exc
+
+        if status == "err":
+            raise value
+        return value
+
     def send(self, payload: bytes) -> None:
         """Отправляет один ISO-TP payload и дожидается завершения передачи."""
         self.stack.send(payload)
+        tx_started_at = time.monotonic()
         while self.stack.transmitting():
             self.stack.process()
             self._sleep_tick()
+            if time.monotonic() - tx_started_at > 30.0:
+                LOGGER.error(
+                    "Ожидание завершения ISO-TP передачи > 30с (payload=%d байт). "
+                    "Прерываем ожидание.",
+                    len(payload),
+                )
+                break
 
     def start(self) -> None:
         """Запускает фоновый поток приема."""
@@ -656,6 +818,8 @@ class CanIsoTpTransport:
             self._cb_thread.join(timeout=1)
 
         self.bus.shutdown()
+        if self._candump_logger is not None:
+            self._candump_logger.close()
 
     def __enter__(self) -> "CanIsoTpTransport":
         self.start()
@@ -858,11 +1022,16 @@ def run_sender(config: AppConfig) -> None:
     with CanIsoTpTransport(
         channel=config.can_channel,
         bitrate=config.can_bitrate,
+        slcan_tty_baudrate=config.slcan_tty_baudrate,
+        slcan_sleep_after_open=config.slcan_sleep_after_open,
+        slcan_read_timeout=config.slcan_read_timeout,
+        slcan_open_timeout_sec=config.slcan_open_timeout_sec,
         tx_id=config.sender_tx_id,
         rx_id=config.sender_rx_id,
         iso_tp_params=config.iso_tp_params,
         use_stack_sleep_time=config.use_stack_sleep_time,
         loop_sleep_sec=config.loop_sleep_sec,
+        candump_log_path=config.candump_log_path,
     ) as transport:
         tablo = RouteAndTwoLinesTablo(
             route_width=config.route_width,
@@ -894,11 +1063,16 @@ def run_controller(config: AppConfig) -> None:
     with CanIsoTpTransport(
         channel=config.can_channel,
         bitrate=config.can_bitrate,
+        slcan_tty_baudrate=config.slcan_tty_baudrate,
+        slcan_sleep_after_open=config.slcan_sleep_after_open,
+        slcan_read_timeout=config.slcan_read_timeout,
+        slcan_open_timeout_sec=config.slcan_open_timeout_sec,
         tx_id=config.sender_rx_id,
         rx_id=config.sender_tx_id,
         iso_tp_params=config.iso_tp_params,
         use_stack_sleep_time=config.use_stack_sleep_time,
         loop_sleep_sec=config.loop_sleep_sec,
+        candump_log_path=config.candump_log_path,
         on_receive=controller.on_receive,
     ):
         while True:
@@ -976,6 +1150,13 @@ if __name__ == "__main__":
         backup_count=config.log_backup_count,
     )
     LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+    LOGGER.info(
+        "Параметры CAN: channel=%s bitrate=%d tty_baud=%d candump=%s",
+        config.can_channel,
+        config.can_bitrate,
+        config.slcan_tty_baudrate,
+        config.candump_log_path if config.candump_log_path is not None else "disabled",
+    )
 
     if args.mode == "send":
         run_sender(config)
