@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 import logging.handlers
 import math
 import threading
@@ -35,7 +36,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Protocol, Tuple
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -76,6 +81,12 @@ COLOR_CODE_TO_RGB: dict[int, tuple[int, int, int]] = {
 HEADER_SIZE_BYTES = 11
 
 LOGGER = logging.getLogger("can-tablo")
+
+
+class IsoTpSender(Protocol):
+    """Минимальный интерфейс транспорта для AbstractTablo (один ISO-TP канал)."""
+
+    def send(self, payload: bytes) -> None: ...
 
 
 @dataclass(slots=True)
@@ -684,7 +695,8 @@ class AbstractTablo(ABC):
         pad_top: int,
         pad_bottom: int,
         renderer: TextRenderer,
-        transport: CanIsoTpTransport,
+        transport: IsoTpSender,
+        color_non_black: int = COLOR_YELLOW,
     ) -> None:
         self.width = width
         self.height = height
@@ -694,6 +706,7 @@ class AbstractTablo(ABC):
         self.pad_bottom = pad_bottom
         self.renderer = renderer
         self.transport = transport
+        self.color_non_black = color_non_black
 
     def render_region(
         self,
@@ -702,13 +715,14 @@ class AbstractTablo(ABC):
         y: int,
         width: int,
         height: int,
-        color_non_black: int = COLOR_YELLOW,
+        color_non_black: Optional[int] = None,
         horizontal_scale: float = 1.0,
     ) -> None:
         """
         Полный цикл формирования и отправки одной области:
         текст -> bitmap -> пакет -> payload -> ISO-TP.
         """
+        c = self.color_non_black if color_non_black is None else color_non_black
         image = self.renderer.render(
             text,
             (width, height),
@@ -719,7 +733,7 @@ class AbstractTablo(ABC):
             x=x,
             y=y,
             image=image,
-            color_non_black=color_non_black,
+            color_non_black=c,
         )
         payload = packet.to_payload()
         self.transport.send(payload)
@@ -727,6 +741,118 @@ class AbstractTablo(ABC):
     @abstractmethod
     def send_to_tablo(self, json_data: str) -> None:
         """Формирует набор областей из входных данных и отправляет их на табло."""
+
+
+class RouteAndOneLineTablo(AbstractTablo):
+    """
+    Маршрут слева на всю высоту + одна строка справа на всю высоту.
+    """
+
+    def __init__(
+        self,
+        route_width: int,
+        route_text_scale_x: float = 1.0,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.route_width = route_width
+        self.route_text_scale_x = route_text_scale_x
+
+    def send_to_tablo(self, json_data: str) -> None:
+        data = json.loads(json_data)
+        route = data.get("firstString", "")
+        top = data.get("secondString", "")
+        bottom = data.get("thirdString", "")
+
+        usable_height = self.height - self.pad_top - self.pad_bottom
+        right_w = self.width - self.route_width - self.pad_right
+
+        self.render_region(
+            route,
+            self.pad_left,
+            self.pad_top,
+            self.route_width,
+            usable_height,
+            horizontal_scale=self.route_text_scale_x,
+        )
+        right_text = f"{top} {bottom}".strip() if top and bottom else (top or bottom)
+        self.render_region(
+            right_text,
+            self.pad_left + self.route_width,
+            self.pad_top,
+            right_w,
+            usable_height,
+        )
+
+
+class RearRouteOnlyTablo(AbstractTablo):
+    """Задний указатель: только номер маршрута на всё поле."""
+
+    def __init__(
+        self,
+        route_text_scale_x: float = 1.0,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.route_text_scale_x = route_text_scale_x
+
+    def send_to_tablo(self, json_data: str) -> None:
+        data = json.loads(json_data)
+        route = data.get("firstString", "")
+        usable_height = self.height - self.pad_top - self.pad_bottom
+        usable_width = self.width - self.pad_left - self.pad_right
+        self.render_region(
+            route,
+            self.pad_left,
+            self.pad_top,
+            usable_width,
+            usable_height,
+            horizontal_scale=self.route_text_scale_x,
+        )
+
+
+class TickerBoardTablo(AbstractTablo):
+    """Бегущая строка: одна или две строки на всю ширину (без колонки маршрута)."""
+
+    def __init__(self, ticker_lines: int = 2, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.ticker_lines = max(1, min(2, ticker_lines))
+
+    def send_to_tablo(self, json_data: str) -> None:
+        data = json.loads(json_data)
+        line1 = data.get("firstString", "")
+        line2 = data.get("secondString", "")
+        usable_height = self.height - self.pad_top - self.pad_bottom
+        usable_width = self.width - self.pad_left - self.pad_right
+
+        if self.ticker_lines == 1:
+            text = f"{line1} {line2}".strip() if line1 and line2 else (line1 or line2)
+            self.render_region(
+                text,
+                self.pad_left,
+                self.pad_top,
+                usable_width,
+                usable_height,
+            )
+            return
+
+        half_h = usable_height // 2
+        self.render_region(
+            line1,
+            self.pad_left,
+            self.pad_top,
+            usable_width,
+            half_h,
+        )
+        self.render_region(
+            line2,
+            self.pad_left,
+            self.pad_top + half_h,
+            usable_width,
+            usable_height - half_h,
+        )
 
 
 class RouteAndTwoLinesTablo(AbstractTablo):
@@ -849,36 +975,28 @@ class MockController:
 # ============================================================
 
 
-def run_sender(config: AppConfig) -> None:
-    """Отправляет текст из `text-in.json` на табло по CAN/ISO-TP."""
-    renderer = TextRenderer(str(config.font_path))
-    json_data = load_text_json(config.text_in_path)
+def run_sender(config_path: Path) -> None:
+    """Отправляет текст из `text-in.json` на все маршрутные табло по CAN/ISO-TP."""
+    from led_config import load_multi_led_config
+    from led_service import run_sender_multi
 
-    LOGGER.info("Отправка текста из %s", config.text_in_path)
-    with CanIsoTpTransport(
-        channel=config.can_channel,
-        bitrate=config.can_bitrate,
-        tx_id=config.sender_tx_id,
-        rx_id=config.sender_rx_id,
-        iso_tp_params=config.iso_tp_params,
-        use_stack_sleep_time=config.use_stack_sleep_time,
-        loop_sleep_sec=config.loop_sleep_sec,
-    ) as transport:
-        tablo = RouteAndTwoLinesTablo(
-            route_width=config.route_width,
-            route_text_scale_x=config.route_text_scale_x,
-            width=config.tablo_width,
-            height=config.tablo_height,
-            pad_left=config.pad_left,
-            pad_right=config.pad_right,
-            pad_top=config.pad_top,
-            pad_bottom=config.pad_bottom,
-            renderer=renderer,
-            transport=transport,
-        )
-        tablo.send_to_tablo(json_data)
-        time.sleep(0.001)
+    cfg = load_multi_led_config(config_path)
+    LOGGER.info("Отправка текста из %s", cfg.text_in_path)
+    run_sender_multi(cfg, lambda: load_text_json(cfg.text_in_path))
     LOGGER.info("Отправка завершена")
+
+
+def run_api_server(cfg: "MultiLedConfig") -> None:
+    """HTTP API (FastAPI + uvicorn). Хост и порт из секции [api-server] в config.toml."""
+    import uvicorn
+
+    from api_app import create_app
+
+    uvicorn.run(
+        create_app(cfg.config_path),
+        host=cfg.api_server_host,
+        port=cfg.api_server_port,
+    )
 
 
 def run_controller(config: AppConfig) -> None:
@@ -951,9 +1069,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("send", "recv", "demo"),
+        choices=("send", "recv", "demo", "api"),
         default="send",
-        help="Режим работы: send, recv или demo (по умолчанию send)",
+        help="Режим работы: send, recv, demo или api (по умолчанию send)",
     )
     parser.add_argument(
         "-c",
@@ -967,19 +1085,41 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     config_path = Path(args.config).resolve()
-    config = load_app_config(config_path)
-
-    setup_logging(
-        log_dir=config.logs_dir,
-        filename=config.log_filename,
-        max_bytes=config.log_max_bytes,
-        backup_count=config.log_backup_count,
-    )
-    LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
 
     if args.mode == "send":
-        run_sender(config)
-    elif args.mode == "recv":
-        run_controller(config)
+        from led_config import load_multi_led_config
+
+        _cfg = load_multi_led_config(config_path)
+        setup_logging(
+            log_dir=_cfg.logs_dir,
+            filename=_cfg.log_filename,
+            max_bytes=_cfg.log_max_bytes,
+            backup_count=_cfg.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        run_sender(config_path)
+    elif args.mode == "api":
+        from led_config import load_multi_led_config
+
+        _cfg = load_multi_led_config(config_path)
+        setup_logging(
+            log_dir=_cfg.logs_dir,
+            filename=_cfg.log_filename,
+            max_bytes=_cfg.log_max_bytes,
+            backup_count=_cfg.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        run_api_server(_cfg)
     else:
-        run_local_demo(config)
+        config = load_app_config(config_path)
+        setup_logging(
+            log_dir=config.logs_dir,
+            filename=config.log_filename,
+            max_bytes=config.log_max_bytes,
+            backup_count=config.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        if args.mode == "recv":
+            run_controller(config)
+        else:
+            run_local_demo(config)

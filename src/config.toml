@@ -31,3 +31,7 @@ pad_bottom = 2
 [TextIn]
 path = "../data/text-in.json"
 font = "../data/DejaVuSans.ttf"
+
+[api-server]
+host = "0.0.0.0"
+port = 8000
