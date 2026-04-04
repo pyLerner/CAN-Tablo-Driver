@@ -26,12 +26,18 @@ font = "../data/DejaVuSans.ttf"
 
 [api-server]
 host = "0.0.0.0"
-port = 8000
+port = 7070
 
 [display]
 display-id = "front-display"
-sender_tx_id = 0x18EF1001
-sender_rx_id = 0x18EF1109
+
+# 0x000007E0 - ID для отправки для табло 64x128
+# 0x000007E8 - ответ о готовности.
+# 0x000007E1 - ID для отправки для табло 64x256
+# 0x000007E9 - ответ о готовности. 64x256
+
+sender_tx_id = 0x000007E1
+sender_rx_id = 0x000007E9
 width = 192
 height = 64
 
@@ -46,7 +52,7 @@ padding = { t = 2, r = 2, b = 2, l = 2 }
 
 [display.2]
 bg = 0
-fg = 2
+fg = 3
 font = 1
 text_scale_x = 1.0
 area = { x = 80, y = 0, w = 112, h = 32 }
@@ -54,7 +60,7 @@ padding = { t = 2, r = 2, b = 2, l = 2 }
 
 [display.3]
 bg = 0
-fg = 2
+fg = 5
 font = 1
 text_scale_x = 1.0
 area = { x = 80, y = 32, w = 112, h = 32 }

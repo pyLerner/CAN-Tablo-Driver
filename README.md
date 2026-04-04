@@ -147,8 +147,12 @@ flowchart TB
 # Отправить содержимое text-in.json на табло по текущему конфигу (CAN)
 python src/main.py send -c src/config.toml
 
-# HTTP API (хост/порт из [api-server])
+# HTTP API (хост/порт из секции [api-server] в config.toml: host, port)
 python src/main.py api -c src/config.toml
+
+# То же через стартовый скрипт в корне репозитория (по умолчанию ./config.toml)
+uv run python run_api_server.py
+uv run python run_api_server.py --config path/to/config.toml
 
 # Локальная проверка без CAN: рендер → payload → восстановление картинки
 python src/main.py demo -c src/config.toml
