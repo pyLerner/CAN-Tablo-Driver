@@ -1,5 +1,7 @@
 # REST API: LED displays (CAN) — версия 1
 
+> **Устарело для текущего кода.** Актуальный контракт HTTP и конфигурации: **[API_LEDDISPLAYS_V2.md](API_LEDDISPLAYS_V2.md)** (одно табло, `color-map`, зоны `[display.N]`, `PUT /api/leddisplays/v1/values/update`). Ниже сохранено описание прежней схемы мультитабло и эндпоинтов `route/set`, `tickerboard/set` для истории.
+
 Документ описывает HTTP-интерфейс сервиса после реализации плана «REST API и мультитабло для CAN LED» (общий `Bus`, секции табло в TOML, FastAPI + uvicorn). Все пути относительны к базовому URL сервера (например `http://127.0.0.1:8000`).
 
 ## Общие соглашения
@@ -61,7 +63,7 @@
 - `side-front-display`
 - `side-rear-display`
 - `rear-display`
-- `ticker-board`
+- `ticker-board` — одна секция таблицы или **массив** объектов (несколько `[[ticker-board]]` в TOML).
 
 В каждой секции, помимо идентификаторов ISO-TP, задаётся геометрия и поведение, аналогично нынешнему `[tabloRouteTwoStrings]`:
 
@@ -100,6 +102,17 @@
     "sender-rx-id": 2040
   },
   "color": "YELLOW"
+}
+```
+
+Несколько тикеров в одном запросе — массив блоков:
+
+```json
+{
+  "ticker-board": [
+    { "sender-tx-id": 2032, "sender-rx-id": 2040, "width": 256, "height": 32 },
+    { "sender-tx-id": 2033, "sender-rx-id": 2041, "width": 128, "height": 32 }
+  ]
 }
 ```
 
@@ -166,7 +179,7 @@
 
 ## `POST /api/leddisplays/v1/tickerboard/set`
 
-Сохраняет в памяти строки внутрисалонного тикера и **асинхронно** отправляет данные **только** на табло секции `ticker-board`. Маршрутные табло не затрагиваются.
+Сохраняет в памяти строки внутрисалонного тикера и **асинхронно** отправляет данные **только** на табло секций `ticker-board` (все настроенные в конфиге экземпляры). Маршрутные табло не затрагиваются.
 
 ### Тело запроса
 
@@ -212,7 +225,7 @@
 | `POST` | `/api/leddisplays/v1/config/set` | Частичное обновление конфига и TOML |
 | `POST` | `/api/leddisplays/v1/route/set` | Три строки маршрута → память + все маршрутные табло |
 | `GET` | `/api/leddisplays/v1/route/set` | Чтение трёх строк из памяти |
-| `POST` | `/api/leddisplays/v1/tickerboard/set` | Две строки тикера → память + только ticker-board |
+| `POST` | `/api/leddisplays/v1/tickerboard/set` | Две строки тикера → память + все секции ticker-board |
 
 ---
 

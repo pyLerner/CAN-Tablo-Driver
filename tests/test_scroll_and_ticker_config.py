@@ -1,4 +1,4 @@
-"""Проверки opcode 0x0002 и загрузки нескольких ticker-board."""
+"""Проверки opcode 0x0002 и загрузки конфига с [display] / зонами."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ if str(SRC) not in sys.path:
 from main import (  # noqa: E402
     OP_FILL_RECT_MASK,
     OP_FILL_RECT_MASK_SCROLL,
+    AbstractTablo,
     RectMaskPacket,
-    RouteAndTwoLinesTablo,
     read_u16le,
 )
 from led_config import load_multi_led_config  # noqa: E402
@@ -38,12 +38,20 @@ class _FakeRenderer:
         region_height: int,
         pad: int,
         horizontal_scale: float = 1.0,
+        font_path: str | None = None,
     ) -> int:
         if text == "wide":
             return 500
         return 10
 
-    def render(self, text: str, size: tuple[int, int], pad: int, horizontal_scale: float = 1.0):
+    def render(
+        self,
+        text: str,
+        size: tuple[int, int],
+        pad: int,
+        horizontal_scale: float = 1.0,
+        font_path: str | None = None,
+    ):
         from PIL import Image
 
         return Image.new("L", size, 0)
@@ -54,10 +62,16 @@ class _FakeRenderer:
         region_height: int,
         pad: int,
         horizontal_scale: float = 1.0,
+        font_path: str | None = None,
     ):
         from PIL import Image
 
         return Image.new("L", (200, region_height), 0)
+
+
+class _TabloForRenderTest(AbstractTablo):
+    def send_to_tablo(self, json_data: str) -> None:
+        raise NotImplementedError
 
 
 def test_rect_mask_packet_accepts_scroll_opcode() -> None:
@@ -72,9 +86,7 @@ def test_rect_mask_packet_accepts_scroll_opcode() -> None:
 def test_render_region_static_vs_scroll() -> None:
     cap = _CaptureTransport()
     r = _FakeRenderer()
-    tablo = RouteAndTwoLinesTablo(
-        route_width=80,
-        route_text_scale_x=1.0,
+    tablo = _TabloForRenderTest(
         width=300,
         height=64,
         pad_left=0,
@@ -92,7 +104,7 @@ def test_render_region_static_vs_scroll() -> None:
     assert read_u16le(cap.payloads[1], 0) == OP_FILL_RECT_MASK_SCROLL
 
 
-def test_load_two_ticker_boards() -> None:
+def test_load_display_with_zones() -> None:
     toml = b"""
 [can]
 channel = "can0"
@@ -114,26 +126,36 @@ max_size = 1048576
 path = "./text-in.json"
 font = "./DejaVuSans.ttf"
 
-[[ticker-board]]
+[display]
+display-id = "test-display"
 sender_tx_id = 0x18EF5001
 sender_rx_id = 0x18EF5101
 width = 256
 height = 32
 
-[[ticker-board]]
-sender_tx_id = 0x18EF6001
-sender_rx_id = 0x18EF6101
-width = 128
-height = 32
+[display.1]
+bg = 0
+fg = 2
+font = 1
+text_scale_x = 1.0
+area = { x = 0, y = 0, w = 128, h = 32 }
+padding = { t = 2, r = 2, b = 2, l = 2 }
+
+[display.2]
+bg = 0
+fg = 2
+font = 1
+area = { x = 128, y = 0, w = 128, h = 32 }
+padding = { t = 2, r = 2, b = 2, l = 2 }
 """
     with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
         f.write(toml)
         path = Path(f.name)
     try:
         cfg = load_multi_led_config(path)
-        assert len(cfg.tickers) == 2
-        assert cfg.tickers[0].sender_tx_id == 0x18EF5001
-        assert cfg.tickers[1].sender_tx_id == 0x18EF6001
-        assert cfg.ticker is cfg.tickers[0]
+        assert cfg.display_id == "test-display"
+        assert cfg.sender_tx_id == 0x18EF5001
+        assert len(cfg.zones) == 2
+        assert "1" in cfg.zones and "2" in cfg.zones
     finally:
         path.unlink(missing_ok=True)

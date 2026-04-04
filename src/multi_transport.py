@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any, Optional
 
 try:
@@ -69,6 +71,10 @@ class MultiIsoTpTransport:
         stack = self._stacks[key]
         with self._lock:
             stack.send(payload)
+        # Стек после start() обрабатывает FC/CF во внутреннем потоке; без ожидания
+        # `with MultiIsoTpTransport()` закрывает шину, пока многокадровая передача ещё не завершена.
+        while stack.transmitting():
+            time.sleep(max(0.0001, float(stack.sleep_time())))
 
     def close(self) -> None:
         for stack in self._stacks.values():

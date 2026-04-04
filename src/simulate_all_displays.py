@@ -1,6 +1,5 @@
 """
-Имитация отправки на все табло из config.toml без CAN: те же табло и payload,
-итоговые картинки — склейка областей в RGB и сохранение в каталог logs.
+Имитация отправки на одно табло из config.toml без CAN: склейка областей в PNG.
 
 Запуск из корня проекта:
   uv run python src/simulate_all_displays.py --config src/config.toml
@@ -21,22 +20,14 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from led_config import MultiLedConfig, load_multi_led_config
-from led_service import (
-    _make_route_like_tablo,
-    _rear_tablo,
-    _ticker_tablo,
-    route_json_internal,
-    ticker_json_internal,
-)
-from main import RectMaskPacket, TextRenderer
+from led_config import load_multi_led_config
+from led_service import values_json
+from main import RectMaskPacket, TextRenderer, ZonedDisplayTablo
 
 LOGGER = logging.getLogger("simulate-displays")
 
 
 class _CaptureTransport:
-    """Накапливает ISO-TP payload байты (как BoundMultiIsoTp.send)."""
-
     def __init__(self, bucket: list[bytes]) -> None:
         self._bucket = bucket
 
@@ -45,7 +36,6 @@ class _CaptureTransport:
 
 
 def _payloads_to_canvas(width: int, height: int, payloads: list[bytes]) -> Image.Image:
-    """Склеивает области в одно изображение размера табло (как видит контроллер после отрисовки зон)."""
     canvas = Image.new("RGB", (width, height), (0, 0, 0))
     for raw in payloads:
         packet = RectMaskPacket.from_payload(raw)
@@ -54,126 +44,51 @@ def _payloads_to_canvas(width: int, height: int, payloads: list[bytes]) -> Image
     return canvas
 
 
-def _safe_name(prefix: str, suffix: str = ".png") -> str:
-    return f"{prefix}{suffix}"
-
-
-def simulate_all_to_logs(
-    cfg: MultiLedConfig,
-    route_json: str,
-    ticker_json: Optional[str],
+def simulate_display_to_png(
+    cfg,
+    values: dict[str, str],
     output_dir: Path,
-) -> list[Path]:
-    """
-    Формирует payload для каждого табло из конфига и сохраняет итоговые PNG в output_dir.
-
-    Returns:
-        Список путей к сохранённым файлам.
-    """
+) -> Optional[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    bucket: list[bytes] = []
+    transport = _CaptureTransport(bucket)
     renderer = TextRenderer(str(cfg.font_path))
-    color = cfg.display_color_code
-    saved: list[Path] = []
-
-    def run_route_like(name: str, sec) -> None:
-        if sec is None:
-            return
-        bucket: list[bytes] = []
-        transport = _CaptureTransport(bucket)
-        tablo = _make_route_like_tablo(sec, renderer, transport, color)
-        tablo.send_to_tablo(route_json)
-        if not bucket:
-            LOGGER.warning("Нет payload для %s", name)
-            return
-        img = _payloads_to_canvas(sec.width, sec.height, bucket)
-        path = output_dir / _safe_name(f"sim_{name}")
-        img.save(path)
-        saved.append(path)
-        LOGGER.info("Сохранено: %s (%d областей)", path, len(bucket))
-
-    run_route_like("front-display", cfg.front)
-    run_route_like("side-front-display", cfg.side_front)
-    run_route_like("side-rear-display", cfg.side_rear)
-
-    if cfg.rear is not None:
-        bucket: list[bytes] = []
-        transport = _CaptureTransport(bucket)
-        tablo = _rear_tablo(cfg.rear, renderer, transport, color)
-        tablo.send_to_tablo(route_json)
-        if bucket:
-            img = _payloads_to_canvas(cfg.rear.width, cfg.rear.height, bucket)
-            path = output_dir / _safe_name("sim_rear-display")
-            img.save(path)
-            saved.append(path)
-            LOGGER.info("Сохранено: %s (%d областей)", path, len(bucket))
-        else:
-            LOGGER.warning("Нет payload для rear-display")
-
-    if ticker_json is not None and cfg.tickers:
-        for i, t in enumerate(cfg.tickers):
-            bucket = []
-            transport = _CaptureTransport(bucket)
-            tablo = _ticker_tablo(t, renderer, transport, color)
-            tablo.send_to_tablo(ticker_json)
-            if not bucket:
-                LOGGER.warning("Нет payload для ticker-board #%d", i + 1)
-                continue
-            img = _payloads_to_canvas(t.width, t.height, bucket)
-            tag = f"{t.sender_tx_id:#x}"
-            path = output_dir / _safe_name(f"sim_ticker-board_{tag}")
-            img.save(path)
-            saved.append(path)
-            LOGGER.info("Сохранено: %s (%d областей)", path, len(bucket))
-
-    return saved
+    tablo = ZonedDisplayTablo(cfg, renderer, transport)
+    tablo.send_to_tablo(values_json(values))
+    if not bucket:
+        LOGGER.warning("Нет payload для табло")
+        return None
+    img = _payloads_to_canvas(cfg.display_width, cfg.display_height, bucket)
+    path = output_dir / "sim_display.png"
+    img.save(path)
+    LOGGER.info("Сохранено: %s (%d областей)", path, len(bucket))
+    return path
 
 
-def _load_route_json(path: Path) -> str:
-    content = path.read_text(encoding="utf-8")
-    data = json.loads(content)
-    return json.dumps(
-        {
-            "firstString": data.get("firstString", ""),
-            "secondString": data.get("secondString", ""),
-            "thirdString": data.get("thirdString", ""),
-        },
-        ensure_ascii=False,
-    )
+def _load_values_from_file(path: Path) -> dict[str, str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    v = data.get("values", data)
+    if not isinstance(v, dict):
+        return {}
+    return {str(k): str(val) for k, val in v.items()}
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(
-        description="Имитация отправки на все табло: PNG в каталоге logs (из конфига).",
+        description="Имитация одного табло: PNG в каталоге логов.",
     )
     parser.add_argument(
         "--config",
         type=Path,
         default=_SCRIPT_DIR / "config.toml",
-        help="Путь к config.toml (по умолчанию: src/config.toml рядом со скриптом).",
+        help="Путь к config.toml.",
     )
     parser.add_argument(
-        "--route-file",
+        "--values-file",
         type=Path,
         default=None,
-        help="JSON с firstString/secondString/thirdString (по умолчанию — TextIn.path из конфига).",
-    )
-    parser.add_argument(
-        "--ticker-first",
-        type=str,
-        default="Строка тикера 1",
-        help="Первая строка тикера (если задана --skip-ticker — не используется).",
-    )
-    parser.add_argument(
-        "--ticker-second",
-        type=str,
-        default="Строка тикера 2",
-        help="Вторая строка тикера.",
-    )
-    parser.add_argument(
-        "--skip-ticker",
-        action="store_true",
-        help="Не симулировать ticker-board.",
+        help="JSON с полем values (по умолчанию — TextIn.path из конфига).",
     )
     parser.add_argument(
         "--output-dir",
@@ -184,27 +99,21 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_multi_led_config(args.config.resolve())
-    route_path = args.route_file if args.route_file is not None else cfg.text_in_path
-    if not route_path.is_file():
-        LOGGER.error("Файл маршрута не найден: %s", route_path)
+    vf = args.values_file if args.values_file is not None else cfg.text_in_path
+    if not vf.is_file():
+        LOGGER.error("Файл не найден: %s", vf)
         sys.exit(1)
 
-    route_json = _load_route_json(route_path)
-    ticker_json: Optional[str] = None
-    if not args.skip_ticker and cfg.tickers:
-        ticker_json = ticker_json_internal(args.ticker_first, args.ticker_second)
-
-    out: Path = args.output_dir if args.output_dir is not None else cfg.logs_dir
-    out = out.resolve()
+    values = _load_values_from_file(vf)
+    out = (args.output_dir if args.output_dir is not None else cfg.logs_dir).resolve()
 
     LOGGER.info("Конфиг: %s", args.config)
-    LOGGER.info("Каталог вывода: %s", out)
+    LOGGER.info("Вывод: %s", out)
 
-    saved = simulate_all_to_logs(cfg, route_json, ticker_json, out)
-    if not saved:
-        LOGGER.warning("Ни одного изображения не сохранено (проверьте секции в конфиге).")
+    path = simulate_display_to_png(cfg, values, out)
+    if path is None:
+        LOGGER.warning("Изображение не сохранено (нет зон или пустой вывод).")
         sys.exit(2)
-    LOGGER.info("Готово, файлов: %d", len(saved))
 
 
 if __name__ == "__main__":

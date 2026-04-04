@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -27,20 +28,31 @@ def test_ping(client: TestClient) -> None:
     data = r.json()
     assert data["running"] == "OK"
     assert "timestamp-utc" in data
+    assert "display-id" in data
+    assert data["display-id"] == "front-display"
 
 
-def test_route_get_empty(client: TestClient) -> None:
-    r = client.get("/api/leddisplays/v1/route/set")
+@patch("api_app.send_display_values")
+def test_values_update_accepted(_mock_send: object, client: TestClient) -> None:
+    r = client.put(
+        "/api/leddisplays/v1/values/update",
+        json={"values": {"1": "567А"}},
+    )
     assert r.status_code == 200
-    assert r.json()["first-string"] == ""
+    assert r.json()["status"] == "accepted"
+
+
+def test_config_set_noop_empty_body(client: TestClient) -> None:
+    r = client.post("/api/leddisplays/v1/config/set", json={})
+    assert r.status_code == 200
+    assert r.json()["status"] == "noop"
 
 
 def test_led_config_merge() -> None:
     from led_config import deep_merge
 
-    base = {"can": {"channel": "can0", "bitrate": 500000, "sender_tx_id": 1}}
+    base = {"can": {"channel": "can0", "bitrate": 500000}}
     upd = {"can": {"bitrate": 250000}}
     m = deep_merge(base, upd)
     assert m["can"]["channel"] == "can0"
     assert m["can"]["bitrate"] == 250000
-    assert m["can"]["sender_tx_id"] == 1

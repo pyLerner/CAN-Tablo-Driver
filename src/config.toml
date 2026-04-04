@@ -1,8 +1,10 @@
+# =============================================================================
+# Конфигурация драйвера LED-табло (CAN / ISO-TP). Один контроллер — одно табло.
+# =============================================================================
+
 [can]
-channel = "can0"
+channel = "vcan0"
 bitrate = 500000
-sender_tx_id = 0x18EF1001
-sender_rx_id = 0x18EF1101
 
 [iso-tp]
 rx_flowcontrol_timeout = 5000
@@ -18,16 +20,6 @@ file = "tablo.log"
 count = 5
 max_size = 1048576
 
-[tabloRouteTwoStrings]
-route_width = 80
-route_text_scale_x = 0.5
-width = 192
-height = 64
-pad_left = 0
-pad_right = 0
-pad_top = 2
-pad_bottom = 2
-
 [TextIn]
 path = "../data/text-in.json"
 font = "../data/DejaVuSans.ttf"
@@ -35,3 +27,35 @@ font = "../data/DejaVuSans.ttf"
 [api-server]
 host = "0.0.0.0"
 port = 8000
+
+[display]
+display-id = "front-display"
+sender_tx_id = 0x18EF1001
+sender_rx_id = 0x18EF1109
+width = 192
+height = 64
+
+# Маршрут слева, две строки справа (аналог прежнего RouteAndTwoLinesTablo)
+[display.1]
+bg = 0
+fg = 2
+font = 1
+text_scale_x = 0.5
+area = { x = 0, y = 0, w = 80, h = 64 }
+padding = { t = 2, r = 2, b = 2, l = 2 }
+
+[display.2]
+bg = 0
+fg = 2
+font = 1
+text_scale_x = 1.0
+area = { x = 80, y = 0, w = 112, h = 32 }
+padding = { t = 2, r = 2, b = 2, l = 2 }
+
+[display.3]
+bg = 0
+fg = 2
+font = 1
+text_scale_x = 1.0
+area = { x = 80, y = 32, w = 112, h = 32 }
+padding = { t = 2, r = 2, b = 2, l = 2 }
