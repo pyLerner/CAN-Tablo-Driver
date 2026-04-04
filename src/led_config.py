@@ -24,6 +24,13 @@ COLOR_WHITE = 0x07
 
 RGB_BLACK = (0, 0, 0)
 RGB_YELLOW = (255, 255, 0)
+RGB_RED = (255, 0, 0)
+RGB_GREEN = (0, 255, 0)
+RGB_BLUE = (0, 0, 255)
+RGB_CYAN = (0, 255, 255)
+RGB_MAGENTA = (255, 0, 255)
+RGB_WHITE = (255, 255, 255)
+
 
 
 def resolve_path(base_dir: Path, raw_path: str) -> Path:
@@ -49,19 +56,19 @@ def default_color_map() -> dict[str, tuple[int, int, int]]:
         "0": RGB_BLACK,
         "1": (255, 255, 255),
         "2": RGB_YELLOW,
-        "3": (255, 0, 0),
-        "4": (0, 255, 0),
-        "5": (0, 0, 255),
-        "6": (0, 255, 255),
-        "7": (255, 0, 255),
-        "8": (128, 128, 128),
-        "9": (200, 200, 200),
-        "10": (100, 100, 255),
-        "11": (255, 200, 0),
-        "12": (0, 128, 0),
-        "13": (128, 0, 0),
-        "14": (64, 64, 64),
-        "15": (220, 220, 220),
+        "3": (255, 0, 0),   # RED
+        "4": (0, 255, 0),   # GREEN
+        "5": (0, 0, 255),   # BLUE
+        "6": (0, 255, 255), # CYAN
+        "7": (255, 0, 255), # MAGENTA
+        "8": (128, 128, 128), # GRAY
+        "9": (200, 200, 200), # LIGHT GRAY
+        "10": (100, 100, 255), # LIGHT BLUE
+        "11": (255, 200, 0), # ORANGE
+        "12": (0, 128, 0), # LIGHT GREEN
+        "13": (128, 0, 0), # DARK RED
+        "14": (64, 64, 64), # DARK GRAY
+        "15": (220, 220, 220), # LIGHT GRAY
     }
 
 
@@ -82,6 +89,12 @@ def rgb_index_to_wire_byte(
         return COLOR_BLACK
     if rgb_tuple_matches(rgb, RGB_YELLOW):
         return COLOR_YELLOW
+    if rgb_tuple_matches(rgb, RGB_RED):
+        return COLOR_RED
+    if rgb_tuple_matches(rgb, RGB_GREEN):
+        return COLOR_GREEN
+    if rgb_tuple_matches(rgb, RGB_BLUE):
+        return COLOR_BLUE
     return COLOR_YELLOW if role == "fg" else COLOR_BLACK
 
 

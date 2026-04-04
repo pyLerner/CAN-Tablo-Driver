@@ -11,7 +11,7 @@ from typing import Callable
 from main import TextRenderer, ZonedDisplayTablo
 from multi_transport import BoundMultiIsoTp, MultiIsoTpTransport
 
-from led_config import MultiLedConfig
+from led_config import MultiLedConfig, load_multi_led_config
 
 LOGGER = logging.getLogger("can-tablo")
 
@@ -22,6 +22,7 @@ def values_json(values: dict[str, str]) -> str:
 
 def send_display_values(cfg: MultiLedConfig, values: dict[str, str]) -> None:
     """Отправляет строки зон на единственное табло из [display]."""
+    cfg = load_multi_led_config(cfg.config_path)
     if not cfg.zones:
         LOGGER.warning("Нет зон в конфиге — нечего отправлять")
         return
