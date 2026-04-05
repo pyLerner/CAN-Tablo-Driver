@@ -168,6 +168,35 @@ cd src
 uvicorn api_app:app --host 0.0.0.0 --port 8000
 ```
 
+
+---
+
+## Docker (Compose)
+
+Образ: минимальный `debian:bookworm-slim`, зависимости через `uv sync --frozen`, рабочий каталог `/opt/can-tablo`, часовой пояс **UTC**, процесс под пользователем UID 1000.
+
+**Подготовка**
+
+1. Скопируйте пример конфигурации: `cp docker/etc/config.example.toml docker/etc/config.toml` и при необходимости отредактируйте CAN ID и зоны.
+2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs` — пути в `config.toml` должны совпадать с `/opt/can-tablo/data/...` (см. пример).
+
+**Сборка и запуск**
+
+```bash
+docker compose up --build
+```
+
+В [compose.yaml](compose.yaml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Дополнительные группы (`dialout`) и проброс `/dev/...` настройте под вашу систему (комментарии в файле).
+
+**Точка входа в образе**
+
+```text
+uv run --no-sync run_api_server --config /opt/can-tablo/etc/config.toml
+```
+
+Конфиг монтируется с хоста: `./docker/etc` → `/opt/can-tablo/etc` (только чтение), данные: `./docker/data` → `/opt/can-tablo/data`.
+
+
 ---
 
 ## Примеры HTTP (curl)
