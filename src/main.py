@@ -8,7 +8,9 @@ JSON -> текст -> растровая область -> payload -> CAN ISO-TP
 CAN ISO-TP -> payload -> декодирование области -> изображение -> сохранение
 
 Формат payload области:
-- 2 байта: тип операции (0x0001 = заливка прямоугольной области по маске)
+- 2 байта: тип операции (little-endian uint16):
+  - 0x0001 — заливка прямоугольной области по маске; width/height = размер окна на табло
+  - 0x0002 — та же маска; bitmap полной ширины текста для бегущей строки (width/height = размер переданного растра)
 - 2 байта: X
 - 2 байта: Y
 - 2 байта: width
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 import logging.handlers
 import math
 import threading
@@ -35,9 +38,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Protocol, Tuple
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 from PIL import Image, ImageDraw, ImageFont
+
+from led_config import MultiLedConfig, ZoneArea, rgb_index_to_wire_byte
 
 try:
     import can
@@ -52,6 +61,7 @@ except ImportError:  # pragma: no cover - полезно для локально
 # ============================================================
 
 OP_FILL_RECT_MASK = 0x0001
+OP_FILL_RECT_MASK_SCROLL = 0x0002
 
 COLOR_BLACK = 0x00
 COLOR_RED = 0x01
@@ -76,6 +86,12 @@ COLOR_CODE_TO_RGB: dict[int, tuple[int, int, int]] = {
 HEADER_SIZE_BYTES = 11
 
 LOGGER = logging.getLogger("can-tablo")
+
+
+class IsoTpSender(Protocol):
+    """Минимальный интерфейс транспорта для AbstractTablo (один ISO-TP канал)."""
+
+    def send(self, payload: bytes) -> None: ...
 
 
 @dataclass(slots=True)
@@ -232,8 +248,8 @@ def load_app_config(config_path: Path) -> AppConfig:
     can_cfg = raw.get("can", {})
     iso_tp_cfg = raw.get("iso-tp", {})
     logs_cfg = raw.get("logs", {})
-    tablo_cfg = raw.get("tabloRouteTwoStrings", {})
     text_in_cfg = raw.get("TextIn", {})
+    display_sec = raw.get("display", {})
 
     iso_tp_params = {
         "rx_flowcontrol_timeout": int(iso_tp_cfg.get("rx_flowcontrol_timeout", 5000)),
@@ -242,11 +258,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         "blocksize": int(iso_tp_cfg.get("blocksize", 8)),
     }
 
+    tx = int(display_sec.get("sender_tx_id", can_cfg.get("sender_tx_id", 0x18EF1001)))
+    rx = int(display_sec.get("sender_rx_id", can_cfg.get("sender_rx_id", 0x18EF1101)))
+
     return AppConfig(
         can_channel=str(can_cfg.get("channel", "can0")),
         can_bitrate=int(can_cfg.get("bitrate", 500_000)),
-        sender_tx_id=int(can_cfg.get("sender_tx_id", 0x18EF1001)),
-        sender_rx_id=int(can_cfg.get("sender_rx_id", 0x18EF1101)),
+        sender_tx_id=tx,
+        sender_rx_id=rx,
         iso_tp_params=iso_tp_params,
         use_stack_sleep_time=bool(iso_tp_cfg.get("use_stack_sleep_time", True)),
         loop_sleep_sec=float(iso_tp_cfg.get("loop_sleep_sec", 0.0001)),
@@ -254,14 +273,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         log_filename=str(logs_cfg.get("file", "tablo.log")),
         log_backup_count=int(logs_cfg.get("count", 5)),
         log_max_bytes=int(logs_cfg.get("max_size", 1_048_576)),
-        route_width=int(tablo_cfg.get("route_width", 80)),
-        route_text_scale_x=float(tablo_cfg.get("route_text_scale_x", 1.0)),
-        tablo_width=int(tablo_cfg.get("width", 192)),
-        tablo_height=int(tablo_cfg.get("height", 64)),
-        pad_left=int(tablo_cfg.get("pad_left", 0)),
-        pad_right=int(tablo_cfg.get("pad_right", 0)),
-        pad_top=int(tablo_cfg.get("pad_top", 2)),
-        pad_bottom=int(tablo_cfg.get("pad_bottom", 2)),
+        route_width=80,
+        route_text_scale_x=1.0,
+        tablo_width=int(display_sec.get("width", 192)),
+        tablo_height=int(display_sec.get("height", 64)),
+        pad_left=0,
+        pad_right=0,
+        pad_top=2,
+        pad_bottom=2,
         text_in_path=resolve_path(base_dir, str(text_in_cfg.get("path", "./text-in.json"))),
         font_path=resolve_path(base_dir, str(text_in_cfg.get("font", "./DejaVuSans.ttf"))),
     )
@@ -294,6 +313,85 @@ class TextRenderer:
 
     def __init__(self, font_path: str) -> None:
         self.font_path = font_path
+        self._font_cache: dict[tuple[str, int], Any] = {}
+
+    def _truetype(self, path: str, size: int) -> Any:
+        key = (path, size)
+        if key not in self._font_cache:
+            self._font_cache[key] = ImageFont.truetype(path, size)
+        return self._font_cache[key]
+
+    def _font_for(self, font_path: Optional[str]) -> str:
+        return font_path if font_path else self.font_path
+
+    def _scaled_text_layer(
+        self,
+        text: str,
+        region_height: int,
+        pad: int,
+        horizontal_scale: float,
+        font_path: Optional[str] = None,
+    ) -> tuple[Image.Image, int]:
+        """
+        Строит слой с текстом после горизонтального масштаба.
+        Второе значение — высота глифа по bbox (для вертикального центрирования в полосе).
+        """
+        height = region_height
+        text_height = max(1, height - 2 * pad)
+        safe_scale = max(0.01, horizontal_scale)
+        fp = self._font_for(font_path)
+        font = self._truetype(fp, text_height)
+        draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height_bbox = bbox[3] - bbox[1]
+        text_layer = Image.new("L", (max(1, text_width), max(1, text_height_bbox)), 0)
+        text_layer_draw = ImageDraw.Draw(text_layer)
+        text_layer_draw.text((-bbox[0], -bbox[1]), text, fill=255, font=font)
+
+        if abs(safe_scale - 1.0) > 1e-6:
+            scaled_width = max(1, int(round(text_layer.width * safe_scale)))
+            text_layer = text_layer.resize(
+                (scaled_width, text_layer.height),
+                resample=Image.Resampling.BICUBIC,
+            )
+
+        return text_layer, text_height_bbox
+
+    def measure_text_width(
+        self,
+        text: str,
+        region_height: int,
+        pad: int,
+        horizontal_scale: float = 1.0,
+        font_path: Optional[str] = None,
+    ) -> int:
+        """Ширина текста в пикселях после `horizontal_scale` (как в `render`)."""
+        layer, _ = self._scaled_text_layer(
+            text, region_height, pad, horizontal_scale, font_path=font_path
+        )
+        return layer.width
+
+    def render_left_aligned(
+        self,
+        text: str,
+        region_height: int,
+        pad: int,
+        horizontal_scale: float = 1.0,
+        font_path: Optional[str] = None,
+    ) -> Image.Image:
+        """
+        Растр ширины текста (без обрезки), выравнивание по левому краю, по вертикали — по центру полосы.
+        """
+        text_layer, text_height_bbox = self._scaled_text_layer(
+            text, region_height, pad, horizontal_scale, font_path=font_path
+        )
+        h = region_height
+        out_w = max(1, text_layer.width)
+        image = Image.new("L", (out_w, h), 0)
+        y_pos = max(0, (h - text_height_bbox) // 2)
+        image.paste(text_layer, (0, y_pos))
+        return image
 
     def render(
         self,
@@ -301,6 +399,7 @@ class TextRenderer:
         size: Tuple[int, int],
         pad: int,
         horizontal_scale: float = 1.0,
+        font_path: Optional[str] = None,
     ) -> Image.Image:
         """
         Создает изображение области и рисует текст по центру по горизонтали.
@@ -316,30 +415,11 @@ class TextRenderer:
             Объект `PIL.Image` в режиме `L`.
         """
         width, height = size
-        text_height = max(1, height - 2 * pad)
-        safe_scale = max(0.01, horizontal_scale)
+        text_layer, text_height_bbox = self._scaled_text_layer(
+            text, height, pad, horizontal_scale, font_path=font_path
+        )
 
         image = Image.new("L", (width, height), 0)
-        draw = ImageDraw.Draw(image)
-
-        font = ImageFont.truetype(self.font_path, text_height)
-        bbox = draw.textbbox((0, 0), text, font=font)
-
-        text_width = bbox[2] - bbox[0]
-        text_height_bbox = bbox[3] - bbox[1]
-
-        # Рендерим текст в отдельный слой, чтобы масштабировать только ось X.
-        text_layer = Image.new("L", (max(1, text_width), max(1, text_height_bbox)), 0)
-        text_layer_draw = ImageDraw.Draw(text_layer)
-        text_layer_draw.text((-bbox[0], -bbox[1]), text, fill=255, font=font)
-
-        if abs(safe_scale - 1.0) > 1e-6:
-            scaled_width = max(1, int(round(text_layer.width * safe_scale)))
-            text_layer = text_layer.resize(
-                (scaled_width, text_layer.height),
-                resample=Image.Resampling.BICUBIC,
-            )
-
         x_pos = max(0, (width - text_layer.width) // 2)
         y_pos = max(0, (height - text_height_bbox) // 2)
 
@@ -359,6 +439,8 @@ class RectMaskPacket:
 
     Поля соответствуют формату сообщения:
     `op(2) + x(2) + y(2) + width(2) + height(2) + color(1) + bitmask(N)`.
+
+    op_code: 0x0001 — статическая область; 0x0002 — та же упаковка, маска полной ширины текста (бегущая строка).
     """
 
     op_code: int
@@ -379,7 +461,7 @@ class RectMaskPacket:
         if self.width <= 0 or self.height <= 0:
             raise ValueError("Размер области должен быть положительным")
 
-        if self.op_code != OP_FILL_RECT_MASK:
+        if self.op_code not in (OP_FILL_RECT_MASK, OP_FILL_RECT_MASK_SCROLL):
             raise ValueError(f"Неподдерживаемая операция: {self.op_code:#06x}")
 
         expected_mask_size = bitmask_size(self.width, self.height)
@@ -396,6 +478,7 @@ class RectMaskPacket:
         image: Image.Image,
         color_non_black: int = COLOR_YELLOW,
         threshold: int = 128,
+        op_code: int = OP_FILL_RECT_MASK,
     ) -> "RectMaskPacket":
         """
         Создает пакет из изображения области.
@@ -413,13 +496,13 @@ class RectMaskPacket:
             image: Изображение области (будет приведено к `L`).
             color_non_black: Код нечерного цвета (1 байт).
             threshold: Порог бинаризации.
+            op_code: 0x0001 — окно табло; 0x0002 — полная ширина текста для скролла.
 
         Returns:
             Сформированный объект пакета.
         """
         gray = image.convert("L")
         width, height = gray.size
-        total_pixels = width * height
         mask = bytearray(bitmask_size(width, height))
 
         pixels = gray.load()
@@ -433,7 +516,7 @@ class RectMaskPacket:
                     mask[byte_index] |= 1 << bit_index_in_byte
 
         return cls(
-            op_code=OP_FILL_RECT_MASK,
+            op_code=op_code,
             x=x,
             y=y,
             width=width,
@@ -670,6 +753,15 @@ class CanIsoTpTransport:
 # ============================================================
 
 
+def zone_areas_overlap_positive(a: ZoneArea, b: ZoneArea) -> bool:
+    """Пересечение полуоткрытых прямоугольников [x, x+w) × [y, y+h) ненулевой площади."""
+    if a.x + a.w <= b.x or b.x + b.w <= a.x:
+        return False
+    if a.y + a.h <= b.y or b.y + b.h <= a.y:
+        return False
+    return True
+
+
 class AbstractTablo(ABC):
     """
     Базовый класс логики разбиения табло на области и отправки этих областей.
@@ -684,7 +776,8 @@ class AbstractTablo(ABC):
         pad_top: int,
         pad_bottom: int,
         renderer: TextRenderer,
-        transport: CanIsoTpTransport,
+        transport: IsoTpSender,
+        color_non_black: int = COLOR_YELLOW,
     ) -> None:
         self.width = width
         self.height = height
@@ -694,6 +787,7 @@ class AbstractTablo(ABC):
         self.pad_bottom = pad_bottom
         self.renderer = renderer
         self.transport = transport
+        self.color_non_black = color_non_black
 
     def render_region(
         self,
@@ -702,89 +796,180 @@ class AbstractTablo(ABC):
         y: int,
         width: int,
         height: int,
-        color_non_black: int = COLOR_YELLOW,
+        color_non_black: Optional[int] = None,
         horizontal_scale: float = 1.0,
+        scroll_if_overflow: bool = True,
+        text_pad: Optional[int] = None,
+        force_scroll: bool = False,
+        font_path: Optional[str] = None,
     ) -> None:
         """
         Полный цикл формирования и отправки одной области:
         текст -> bitmap -> пакет -> payload -> ISO-TP.
+
+        При `scroll_if_overflow=True` и тексте шире окна отправляется bitmap полной ширины
+        с `op_code=0x0002` (бегущая строка на контроллере).
         """
-        image = self.renderer.render(
+        c = self.color_non_black if color_non_black is None else color_non_black
+        pad_eff = self.pad_top if text_pad is None else text_pad
+
+        if not scroll_if_overflow:
+            image = self.renderer.render(
+                text,
+                (width, height),
+                pad_eff,
+                horizontal_scale=horizontal_scale,
+                font_path=font_path,
+            )
+            packet = RectMaskPacket.from_image(
+                x=x,
+                y=y,
+                image=image,
+                color_non_black=c,
+            )
+            self.transport.send(packet.to_payload())
+            return
+
+        if force_scroll:
+            image = self.renderer.render_left_aligned(
+                text,
+                height,
+                pad_eff,
+                horizontal_scale=horizontal_scale,
+                font_path=font_path,
+            )
+            op_code = OP_FILL_RECT_MASK_SCROLL
+            packet = RectMaskPacket.from_image(
+                x=x,
+                y=y,
+                image=image,
+                color_non_black=c,
+                op_code=op_code,
+            )
+            self.transport.send(packet.to_payload())
+            return
+
+        text_w = self.renderer.measure_text_width(
             text,
-            (width, height),
-            self.pad_top,
+            height,
+            pad_eff,
             horizontal_scale=horizontal_scale,
+            font_path=font_path,
         )
+        if text_w <= width:
+            image = self.renderer.render(
+                text,
+                (width, height),
+                pad_eff,
+                horizontal_scale=horizontal_scale,
+                font_path=font_path,
+            )
+            op_code = OP_FILL_RECT_MASK
+        else:
+            image = self.renderer.render_left_aligned(
+                text,
+                height,
+                pad_eff,
+                horizontal_scale=horizontal_scale,
+                font_path=font_path,
+            )
+            op_code = OP_FILL_RECT_MASK_SCROLL
+
         packet = RectMaskPacket.from_image(
             x=x,
             y=y,
             image=image,
-            color_non_black=color_non_black,
+            color_non_black=c,
+            op_code=op_code,
         )
-        payload = packet.to_payload()
-        self.transport.send(payload)
+        self.transport.send(packet.to_payload())
 
     @abstractmethod
     def send_to_tablo(self, json_data: str) -> None:
         """Формирует набор областей из входных данных и отправляет их на табло."""
 
 
-class RouteAndTwoLinesTablo(AbstractTablo):
-    """
-    Макет табло из трех текстовых зон:
-    - левый столбец: номер маршрута
-    - справа сверху: строка 1
-    - справа снизу: строка 2
-    """
+class ZonedDisplayTablo(AbstractTablo):
+    """Табло с разметкой из конфига: зоны [display.N], текст из JSON `values`."""
 
     def __init__(
         self,
-        route_width: int,
-        route_text_scale_x: float = 1.0,
-        *args,
-        **kwargs,
+        cfg: MultiLedConfig,
+        renderer: TextRenderer,
+        transport: IsoTpSender,
     ) -> None:
-        super().__init__(*args, **kwargs)
-        self.route_width = route_width
-        self.route_text_scale_x = route_text_scale_x
+        super().__init__(
+            width=cfg.display_width,
+            height=cfg.display_height,
+            pad_left=0,
+            pad_right=0,
+            pad_top=0,
+            pad_bottom=0,
+            renderer=renderer,
+            transport=transport,
+            color_non_black=COLOR_YELLOW,
+        )
+        self._cfg = cfg
 
     def send_to_tablo(self, json_data: str) -> None:
         data = json.loads(json_data)
-
-        route = data.get("firstString", "")
-        top = data.get("secondString", "")
-        bottom = data.get("thirdString", "")
-
-        usable_height = self.height - self.pad_top - self.pad_bottom
-        half_height = usable_height // 2
-
-        # 1) Область маршрута
-        self.render_region(
-            route, 
-            self.pad_left, 
-            self.pad_top, 
-            self.route_width, 
-            usable_height,
-            horizontal_scale=self.route_text_scale_x,
+        raw_vals = data.get("values", data)
+        values: dict[str, str] = (
+            {str(k): str(v) for k, v in raw_vals.items()} if isinstance(raw_vals, dict) else {}
         )
 
-        # 2) Верхняя строка
-        self.render_region(
-            top,
-            self.pad_left + self.route_width,
-            self.pad_top,
-            self.width - self.route_width - self.pad_right,
-            half_height,
-        )
+        zones = self._cfg.zones
+        if not zones:
+            LOGGER.warning("В конфиге нет зон [display.N]")
+            return
 
-        # 3) Нижняя строка
-        self.render_region(
-            bottom,
-            self.pad_left + self.route_width,
-            self.pad_top + half_height,
-            self.width - self.route_width - self.pad_right,
-            half_height,
-        )
+        max_bottom = max(z.area.y + z.area.h for z in zones.values())
+        if max_bottom > self._cfg.display_height:
+            LOGGER.error(
+                "Нижняя граница зон (max y+h=%d) больше display.height (%d)",
+                max_bottom,
+                self._cfg.display_height,
+            )
+
+        zids = sorted(zones.keys(), key=int)
+        for i, ida in enumerate(zids):
+            za = zones[ida].area
+            for idb in zids[i + 1 :]:
+                zb = zones[idb].area
+                if zone_areas_overlap_positive(za, zb):
+                    LOGGER.error("Перекрытие зон %s и %s по полю area", ida, idb)
+
+        max_right = max(z.area.x + z.area.w for z in zones.values())
+        global_w_overflow = max_right > self._cfg.display_width
+        max_x = max(z.area.x for z in zones.values())
+        rightmost = {k for k, z in zones.items() if z.area.x == max_x}
+
+        font1 = str(self._cfg.font_paths.get(1, Path(self._cfg.font_path)))
+
+        for zid in zids:
+            z = zones[zid]
+            text = values.get(zid, "")
+            pt, pr, pb, pl = z.padding.t, z.padding.r, z.padding.b, z.padding.l
+            inner_w = max(1, z.area.w - pl - pr)
+            inner_h = max(1, z.area.h - pt - pb)
+            x0 = z.area.x + pl
+            y0 = z.area.y + pt
+            text_pad = min(pt, pb, max(0, inner_h // 2 - 1))
+            wire = rgb_index_to_wire_byte(z.fg, self._cfg.color_map, "fg")
+            force_scroll = global_w_overflow and zid in rightmost
+            self.render_region(
+                text,
+                x0,
+                y0,
+                inner_w,
+                inner_h,
+                color_non_black=wire,
+                horizontal_scale=z.text_scale_x,
+                scroll_if_overflow=True,
+                text_pad=text_pad,
+                force_scroll=force_scroll,
+                font_path=font1,
+            )
 
 
 # ============================================================
@@ -849,36 +1034,28 @@ class MockController:
 # ============================================================
 
 
-def run_sender(config: AppConfig) -> None:
-    """Отправляет текст из `text-in.json` на табло по CAN/ISO-TP."""
-    renderer = TextRenderer(str(config.font_path))
-    json_data = load_text_json(config.text_in_path)
+def run_sender(config_path: Path) -> None:
+    """Отправляет текст из `text-in.json` на все маршрутные табло по CAN/ISO-TP."""
+    from led_config import load_multi_led_config
+    from led_service import run_sender_multi
 
-    LOGGER.info("Отправка текста из %s", config.text_in_path)
-    with CanIsoTpTransport(
-        channel=config.can_channel,
-        bitrate=config.can_bitrate,
-        tx_id=config.sender_tx_id,
-        rx_id=config.sender_rx_id,
-        iso_tp_params=config.iso_tp_params,
-        use_stack_sleep_time=config.use_stack_sleep_time,
-        loop_sleep_sec=config.loop_sleep_sec,
-    ) as transport:
-        tablo = RouteAndTwoLinesTablo(
-            route_width=config.route_width,
-            route_text_scale_x=config.route_text_scale_x,
-            width=config.tablo_width,
-            height=config.tablo_height,
-            pad_left=config.pad_left,
-            pad_right=config.pad_right,
-            pad_top=config.pad_top,
-            pad_bottom=config.pad_bottom,
-            renderer=renderer,
-            transport=transport,
-        )
-        tablo.send_to_tablo(json_data)
-        time.sleep(0.001)
+    cfg = load_multi_led_config(config_path)
+    LOGGER.info("Отправка текста из %s", cfg.text_in_path)
+    run_sender_multi(cfg, lambda: load_text_json(cfg.text_in_path))
     LOGGER.info("Отправка завершена")
+
+
+def run_api_server(cfg: "MultiLedConfig") -> None:
+    """HTTP API (FastAPI + uvicorn). Хост и порт из секции [api-server] в config.toml."""
+    import uvicorn
+
+    from api_app import create_app
+
+    uvicorn.run(
+        create_app(cfg.config_path),
+        host=cfg.api_server_host,
+        port=cfg.api_server_port,
+    )
 
 
 def run_controller(config: AppConfig) -> None:
@@ -951,9 +1128,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("send", "recv", "demo"),
+        choices=("send", "recv", "demo", "api"),
         default="send",
-        help="Режим работы: send, recv или demo (по умолчанию send)",
+        help="Режим работы: send, recv, demo или api (по умолчанию send)",
     )
     parser.add_argument(
         "-c",
@@ -967,19 +1144,41 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     config_path = Path(args.config).resolve()
-    config = load_app_config(config_path)
-
-    setup_logging(
-        log_dir=config.logs_dir,
-        filename=config.log_filename,
-        max_bytes=config.log_max_bytes,
-        backup_count=config.log_backup_count,
-    )
-    LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
 
     if args.mode == "send":
-        run_sender(config)
-    elif args.mode == "recv":
-        run_controller(config)
+        from led_config import load_multi_led_config
+
+        _cfg = load_multi_led_config(config_path)
+        setup_logging(
+            log_dir=_cfg.logs_dir,
+            filename=_cfg.log_filename,
+            max_bytes=_cfg.log_max_bytes,
+            backup_count=_cfg.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        run_sender(config_path)
+    elif args.mode == "api":
+        from led_config import load_multi_led_config
+
+        _cfg = load_multi_led_config(config_path)
+        setup_logging(
+            log_dir=_cfg.logs_dir,
+            filename=_cfg.log_filename,
+            max_bytes=_cfg.log_max_bytes,
+            backup_count=_cfg.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        run_api_server(_cfg)
     else:
-        run_local_demo(config)
+        config = load_app_config(config_path)
+        setup_logging(
+            log_dir=config.logs_dir,
+            filename=config.log_filename,
+            max_bytes=config.log_max_bytes,
+            backup_count=config.log_backup_count,
+        )
+        LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
+        if args.mode == "recv":
+            run_controller(config)
+        else:
+            run_local_demo(config)

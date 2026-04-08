@@ -1,0 +1,15 @@
+#!/bin/bash
+
+PATH=/home/teamhd/.local/bin/:$PATH
+
+ip link set can0 type can bitrate 500000 || true
+ip link set can0 up || true
+
+DIR=$(dirname $(realpath $0))
+cd $DIR
+
+while :; do
+    uv run run_api_server.py --config src/config.toml
+    sleep 5
+done
+

@@ -1,0 +1,18 @@
+[Unit]
+Description=Сервис запуска табло  API-CAN
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/teamhd/CAN-Tablo-Driver/tablo.run
+WorkingDirectory=/home/teamhd/CAN-Tablo-Driver
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Environment=KEY=VALUE
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,46 @@
+
+version: "3.3"
+
+services:
+  can-tablo-api:
+    # RK3288 использует ARMv7 (32-бит). Если образ собирается на другой архитектуре,
+    # раскомментируйте строку ниже. При локальной сборке Docker сам определит хост.
+    # platform: linux/arm/v7
+    
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: can-tablo-driver:latest
+    container_name: can-tablo-api
+    restart: unless-stopped
+    
+    # Хостовая сеть обходит Docker-bridge и iptables (netfilter),
+    # что критично при отсутствии поддержки в ядре.
+    network_mode: host
+    
+    # Оставлено, так как может потребоваться доступ к /dev/* или настройке сети на хосте.
+    privileged: true
+
+    # Убрано: tmpfs: /dev/mqueue
+    # Пояснение: /dev/mqueue требует файловой системы типа "mqueue", поддерживаемой ядром.
+    # Монтирование tmpfs туда не включит POSIX message queues. Если приложение не вызывает
+    # mq_open/mq_send, это безопасно. Если вызывает — потребуется пересборка ядра.
+
+    environment:
+      TZ: UTC
+      CAN_TABLO_HOME: /opt/can-tablo
+      UV_PROJECT: /opt/can-tablo
+
+    volumes:
+      - ./docker/etc:/opt/can-tablo/etc:ro
+      - ./docker/data:/opt/can-tablo/data:rw
+
+    user: "1000:1000"
+    # group_add:
+    #   - dialout
+
+    # devices:
+    #   - /dev/vcan0:/dev/vcan0
+    #   - /dev/can0:/dev/can0
+    #   - /dev/ttyACM0:/dev/ttyACM0
+

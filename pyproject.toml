@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
 [project]
 name = "can"
 version = "0.1.0"
@@ -6,7 +10,27 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "can-isotp>=2.0.0",
-    "nuitka>=4.0.3",
+    "fastapi>=0.135.2",
     "pillow>=12.1.1",
+    "pydantic>=2.12.5",
     "python-can>=4.3.0",
+    "tomli-w>=1.2.0",
+    "uvicorn[standard]>=0.42.0",
 ]
+
+[project.scripts]
+run_api_server = "run_api_server:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# В wheel попадает только точка входа; код приложения в src/ поставляется копированием в образе (см. Dockerfile).
+[tool.hatch.build.targets.wheel]
+only-include = ["run_api_server.py"]
+py-modules = ["run_api_server"]
