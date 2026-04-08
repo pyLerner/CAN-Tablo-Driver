@@ -3,7 +3,7 @@
 # =============================================================================
 
 [can]
-channel = "vcan0"
+channel = "can0"
 bitrate = 500000
 
 [iso-tp]
@@ -29,25 +29,25 @@ host = "0.0.0.0"
 port = 7070
 
 [display]
-display-id = "front-display"
+display-id = "side-display"
 
 # 0x000007E0 - ID для отправки для табло 64x128
 # 0x000007E8 - ответ о готовности.
 # 0x000007E1 - ID для отправки для табло 64x256
 # 0x000007E9 - ответ о готовности. 64x256
 
-sender_tx_id = 0x000007E1
-sender_rx_id = 0x000007E9
+sender_tx_id = 0x000007E2
+sender_rx_id = 0x000007EA
 width = 192
-height = 64
+height = 32
 
 # Маршрут слева, две строки справа (аналог прежнего RouteAndTwoLinesTablo)
-[display.1]
+[display.8]
 bg = 0
 fg = 2
 font = 1
-text_scale_x = 0.5
-area = { x = 0, y = 0, w = 80, h = 64 }
+text_scale_x = 1
+area = { x = 0, y = 0, w = 192, h = 32 }
 padding = { t = 2, r = 2, b = 2, l = 2 }
 
 [display.2]
