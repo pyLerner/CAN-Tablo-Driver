@@ -29,7 +29,7 @@ host = "0.0.0.0"
 port = 7070
 
 [display]
-display-id = "side-display"
+display-id = "front-display"
 
 # 0x000007E0 - ID для отправки для табло 64x128
 # 0x000007E8 - ответ о готовности.
