@@ -63,7 +63,7 @@ host = "0.0.0.0"
 port = 7070
 
 [display]
-display-id = "front-display"
+display-id = "rear-display"
 
 # Задний маршрутоуказатель
 sender_tx_id = 0x000007E0

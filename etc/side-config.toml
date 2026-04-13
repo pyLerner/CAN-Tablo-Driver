@@ -64,7 +64,7 @@ host = "0.0.0.0"
 port = 7070
 
 [display]
-display-id = "front-display"
+display-id = "side-display-1"
 
 # Первое боковое
 sender_tx_id = 0x000007E3
