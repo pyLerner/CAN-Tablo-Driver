@@ -41,6 +41,9 @@ sender_rx_id = 0x000007E9
 width = 256
 height = 64
 
+animate = false                 # режим 0x0002 при переполнении / усечение при false (по умолчанию: true)
+debug = true                  # лог текста по зонам (по умолчанию: false)
+
 # Маршрут слева, две строки справа (аналог прежнего RouteAndTwoLinesTablo)
 [display.1]
 bg = 0

@@ -1,64 +1,77 @@
 # =============================================================================
 # Пример конфигурации: одно табло, секции [display] и [display.N].
 # Скопируйте в config.toml и подставьте реальные ID и пути.
+# В комментариях к строкам: «по умолчанию» — как подставляет load_multi_led_config,
+# если ключ опущен (иначе указано отдельно).
 # =============================================================================
 
+# Интерфейс SocketCAN и скорость шины (бит/с).
 [can]
-channel = "can0"
-bitrate = 500000
+channel = "can0"      # имя интерфейса (по умолчанию: can0)
+bitrate = 500000      # скорость CAN (по умолчанию: 500000)
 
+# Параметры ISO-TP (таймауты в мс; stmin/blocksize — см. can-isotp).
 [iso-tp]
-rx_flowcontrol_timeout = 5000
-rx_consecutive_frame_timeout = 5000
-stmin = 10
-blocksize = 8
-use_stack_sleep_time = true
-loop_sleep_sec = 0.0001
+rx_flowcontrol_timeout = 5000           # ожидание Flow Control (по умолчанию: 5000)
+rx_consecutive_frame_timeout = 5000     # таймаут между кадрами многофрейма (по умолчанию: 5000)
+stmin = 10                              # минимальный интервал между CF, мс (по умолчанию: 10)
+blocksize = 8                           # кадров до следующего FC (по умолчанию: 8)
+use_stack_sleep_time = true             # пауза из stack.sleep_time() vs loop_sleep_sec (по умолчанию: true)
+loop_sleep_sec = 0.0001                 # пауза в цикле стека, с (по умолчанию: 0.0001)
 
+# Каталог и ротация файла лога приложения.
 [logs]
-dir = "../logs"
-file = "tablo.log"
-count = 5
-max_size = 1048576
+dir = "../logs"       # каталог логов (по умолчанию: ./logs относительно TOML)
+file = "tablo.log"    # имя файла (по умолчанию: tablo.log)
+count = 5             # число ротированных копий (по умолчанию: 5)
+max_size = 1048576    # размер до ротации, байт (по умолчанию: 1048576)
 
+# Входной JSON и шрифт по умолчанию.
 [TextIn]
-path = "../data/text-in.json"
-font = "../data/DejaVuSans.ttf"
+path = "../data/text-in.json"   # JSON с values (по умолчанию: ./text-in.json)
+font = "../data/DejaVuSans.ttf" # TTF (по умолчанию: ./DejaVuSans.ttf)
 
+# HTTP API (FastAPI / uvicorn).
 [api-server]
-host = "0.0.0.0"
-port = 8000
+host = "0.0.0.0"   # привязка (по умолчанию: 0.0.0.0)
+port = 8000        # порт (по умолчанию: 8000)
 
-# Опционально: явный путь TTF для индекса шрифта 1 (иначе — DejaVuSans-Bold.ttf
+# Опционально: явный путь TTF для индекса шрифта 1 (по умолчанию: DejaVuSans-Bold.ttf
 # рядом с [TextIn].font, иначе тот же файл, что и font).
 # [fonts]
 # 1 = "../data/DejaVuSans-Bold.ttf"
 
+# Одно табло: id, CAN, размер холста, animate/debug. Ключи sender_tx_id, sender_rx_id,
+# width, height, display-id задаются только здесь — в коде значений по умолчанию нет.
 [display]
-display-id = "front-display"
-sender_tx_id = 0x18EF1001
-sender_rx_id = 0x18EF1109
-width = 192
-height = 64
+display-id = "front-display"   # id для /api/ping (обязательно в [display])
+sender_tx_id = 0x18EF1001      # 29-bit TX (обязательно)
+sender_rx_id = 0x18EF1109      # 29-bit RX (обязательно)
+width = 192                    # ширина холста, px (обязательно; в MultiLedConfig до загрузки: 192)
+height = 64                    # высота холста, px (обязательно; в MultiLedConfig до загрузки: 64)
+animate = true                 # режим 0x0002 при переполнении / усечение при false (по умолчанию: true)
+debug = false                  # лог текста по зонам (по умолчанию: false)
 
+# Зона: bg, fg, area, padding обязательны; font и text_scale_x можно опустить (см. умолчания).
 [display.1]
-bg = 0
-fg = 2
-font = 1
-text_scale_x = 0.5
-area = { x = 0, y = 0, w = 80, h = 64 }
-padding = { t = 2, r = 2, b = 2, l = 2 }
+bg = 0                         # индекс фона в color_map (обязательно)
+fg = 2                         # индекс текста (обязательно)
+font = 1                       # индекс шрифта (по умолчанию: 1)
+text_scale_x = 0.5             # масштаб по X (по умолчанию: 1.0)
+area = { x = 0, y = 0, w = 80, h = 64 }   # зона на холсте, px (обязательно)
+padding = { t = 2, r = 2, b = 2, l = 2 }  # отступы, px (обязательно)
 
+# Те же поля, что у [display.1]; text_scale_x можно не указывать (будет 1.0).
 [display.2]
-bg = 0
-fg = 2
-font = 1
-area = { x = 80, y = 0, w = 112, h = 32 }
-padding = { t = 2, r = 2, b = 2, l = 2 }
+bg = 0                         # (обязательно)
+fg = 2                         # (обязательно)
+font = 1                       # (по умолчанию: 1)
+area = { x = 80, y = 0, w = 112, h = 32 }   # (обязательно)
+padding = { t = 2, r = 2, b = 2, l = 2 }    # (обязательно)
 
 [display.3]
-bg = 0
-fg = 2
-font = 1
-area = { x = 80, y = 32, w = 112, h = 32 }
-padding = { t = 2, r = 2, b = 2, l = 2 }
+bg = 0                         # (обязательно)
+fg = 2                         # (обязательно)
+font = 1                       # (по умолчанию: 1)
+area = { x = 80, y = 32, w = 112, h = 32 }   # (обязательно)
+padding = { t = 2, r = 2, b = 2, l = 2 }     # (обязательно)

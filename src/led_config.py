@@ -195,6 +195,8 @@ def _is_zone_key(key: str) -> bool:
         "height",
         "color_map",
         "color",
+        "animate",
+        "debug",
     ):
         return False
     return key.isdigit()
@@ -263,6 +265,8 @@ class MultiLedConfig:
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
     color_map: dict[str, tuple[int, int, int]] = field(default_factory=default_color_map)
     font_paths: dict[int, Path] = field(default_factory=dict)
+    animate: bool = True
+    debug: bool = False
 
 
 def load_multi_led_config(config_path: Path) -> MultiLedConfig:
@@ -316,6 +320,8 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
     cfg.display_height = int(display_sec["height"])
     cfg.color_map = _parse_color_map_from_display(display_sec)
     cfg.zones = _load_zones_from_display(display_sec)
+    cfg.animate = bool(display_sec.get("animate", True))
+    cfg.debug = bool(display_sec.get("debug", False))
 
     return cfg
 
@@ -357,6 +363,8 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
         "sender_rx_id": cfg.sender_rx_id,
         "width": cfg.display_width,
         "height": cfg.display_height,
+        "animate": cfg.animate,
+        "debug": cfg.debug,
         "color_map": _color_map_to_nested(cfg.color_map),
     }
     for zid, zone in sorted(cfg.zones.items(), key=lambda x: int(x[0])):

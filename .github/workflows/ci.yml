@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install DejaVu (truncate tests)
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.6.x"
+
+      - name: Sync and run pytest
+        run: |
+          uv sync --dev
+          uv run pytest -q

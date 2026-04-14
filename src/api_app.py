@@ -72,6 +72,8 @@ class ConfigSetBody(BaseModel):
     zones: Optional[dict[str, ZoneBody]] = None
     channel: Optional[str] = None
     bitrate: Optional[int] = None
+    animate: Optional[bool] = None
+    debug: Optional[bool] = None
 
 
 class ValuesUpdateBody(BaseModel):
@@ -131,6 +133,10 @@ def _config_set_body_to_toml_updates(body: ConfigSetBody) -> dict[str, Any]:
     if body.zones is not None:
         for zk, zv in body.zones.items():
             display[str(zk)] = _zone_body_to_toml(zv)
+    if body.animate is not None:
+        display["animate"] = body.animate
+    if body.debug is not None:
+        display["debug"] = body.debug
     if display:
         upd["display"] = display
     return upd

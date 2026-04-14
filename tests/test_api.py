@@ -48,6 +48,15 @@ def test_config_set_noop_empty_body(client: TestClient) -> None:
     assert r.json()["status"] == "noop"
 
 
+def test_config_set_body_maps_animate_debug() -> None:
+    from api_app import ConfigSetBody, _config_set_body_to_toml_updates
+
+    body = ConfigSetBody(animate=False, debug=True)
+    upd = _config_set_body_to_toml_updates(body)
+    assert upd["display"]["animate"] is False
+    assert upd["display"]["debug"] is True
+
+
 def test_led_config_merge() -> None:
     from led_config import deep_merge
 
