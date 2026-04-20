@@ -287,6 +287,30 @@ curl -sS -X PUT "http://HOST:PORT/api/leddisplays/v1/values/update" \
 
 ---
 
+## Deploy через systemd
+
+В проекте есть готовый скрипт [deploy-can-tablo.sh](deploy-can-tablo.sh), который:
+
+- обновляет код в `/home/teamhd/CAN-Tablo-Driver`;
+- устанавливает unit-файлы `can0-setup.service` и `led-tablo.service` в `/etc/systemd/system`;
+- включает автозапуск (`systemctl enable`) и перезапускает сервисы.
+
+Запуск:
+
+```bash
+sudo ./deploy-can-tablo.sh
+```
+
+Проверка после деплоя:
+
+```bash
+systemctl --no-pager --full status can0-setup.service led-tablo.service
+journalctl -u can0-setup.service -u led-tablo.service -n 200 --no-pager
+ip link show can0
+```
+
+---
+
 ## Тесты и симуляция
 
 ```bash

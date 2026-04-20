@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure can0 interface for CAN Tablo Driver
+After=network.target
+Wants=network.target
+Before=led-tablo.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -lc 'IP_BIN="$(command -v ip)"; "$IP_BIN" link set can0 down || true; "$IP_BIN" link set can0 type can bitrate 500000; "$IP_BIN" link set can0 up'
+ExecStop=/bin/bash -lc 'IP_BIN="$(command -v ip)"; "$IP_BIN" link set can0 down || true'
+
+[Install]
+WantedBy=multi-user.target

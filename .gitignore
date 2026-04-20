@@ -12,3 +12,9 @@ wheels/
 backup
 saved-images
 images
+
+# Nuitka
+*.spec
+*.build
+*.dist
+*.bin/

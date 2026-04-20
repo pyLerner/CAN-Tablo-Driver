@@ -1,15 +1,14 @@
 #!/bin/bash
 
-PATH=/home/teamhd/.local/bin/:$PATH
+set -euo pipefail
 
-ip link set can0 type can bitrate 500000 || true
-ip link set can0 up || true
+PATH="/home/teamhd/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export PATH
+
+UV_BIN="$(command -v uv)"
 
 DIR=$(dirname $(realpath $0))
 cd $DIR
 
-while :; do
-    uv run run_api_server.py --config src/config.toml
-    sleep 5
-done
+exec "${UV_BIN}" run run_api_server.py --config src/config.toml
 
