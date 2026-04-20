@@ -24,11 +24,14 @@ run_api_server = "run_api_server:main"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "nuitka",
     "pytest>=9.0.2",
+    "zstandard",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 # В wheel попадает только точка входа; код приложения в src/ поставляется копированием в образе (см. Dockerfile).
 [tool.hatch.build.targets.wheel]

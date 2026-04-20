@@ -16,10 +16,12 @@ CAN ISO-TP -> payload -> декодирование области -> изобр
 - 2 байта: width
 - 2 байта: height
 - 1 байт: код НЕчерного цвета
-- N байт: битовая маска пикселей области (строка за строкой)
+- N байт: битовая маска пикселей области (строка за строкой, сверху вниз).
+  Каждая строка ширины width кодируется в ceil(width/8) байт (слева направо; в байте —
+  от старшего бита к младшему, MSB-first). Неиспользуемые биты в последнем байте строки
+  — нули. N = ceil(width/8) * height.
   * 0 -> черный пиксель
   * 1 -> нечерный пиксель (цвет из поля color_non_black)
-  * неиспользуемые хвостовые биты последнего байта = 0
 """
 
 from __future__ import annotations
@@ -170,16 +172,61 @@ def payload_to_hex(payload: bytes) -> str:
 
 def bitmask_size(width: int, height: int) -> int:
     """
-    Вычисляет размер битовой маски в байтах для области width x height.
+    Размер маски в байтах: построчное выравнивание до целого байта.
+
+    Для каждой из ``height`` строк используется ``ceil(width / 8)`` байт.
+
+    Args:
+        width: Ширина области в пикселях.
+        height: Высота области в пикселях.
+
+    Returns:
+        Число байт маски в актуальном протоколе.
+    """
+    row_bytes = (width + 7) // 8
+    return row_bytes * height
+
+
+def _legacy_bitmask_size_continuous_unused(width: int, height: int) -> int:
+    """
+    Исторический размер маски как одного сплошного потока бит по всем пикселям.
+
+    Формула: ``ceil(width * height / 8)``. Соседние строки могли продолжаться в середине
+    байта; такой формат **не используется** в текущей реализации и сохранён только для
+    справки и отладки совместимости со старыми версиями.
 
     Args:
         width: Ширина области.
         height: Высота области.
 
     Returns:
-        Количество байтов, достаточное для хранения всех битов пикселей.
+        Число байт в устаревшем упаковании (нигде не вызывается из production-кода).
     """
     return math.ceil((width * height) / 8)
+
+
+def _legacy_pack_mask_from_image_continuous_unused(
+    gray: Image.Image,
+    threshold: int = 128,
+) -> bytes:
+    """
+    Устаревшая упаковка маски: один линейный индекс пикселя по всей области (row-major),
+    без выравнивания строк по байтам. **Не используется** — см. :func:`bitmask_size`
+    и :meth:`RectMaskPacket.from_image`.
+
+    Сохранено как эталон прежнего поведения; не вызывается.
+    """
+    width, height = gray.size
+    mask = bytearray(_legacy_bitmask_size_continuous_unused(width, height))
+    pixels = gray.load()
+    for py in range(height):
+        for px in range(width):
+            pixel_index = py * width + px
+            byte_index = pixel_index // 8
+            bit_index_in_byte = 7 - (pixel_index % 8)
+            if pixels[px, py] > threshold:
+                mask[byte_index] |= 1 << bit_index_in_byte
+    return bytes(mask)
 
 
 def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: int) -> None:
@@ -372,6 +419,39 @@ class TextRenderer:
         )
         return layer.width
 
+    def truncate_text_to_width(
+        self,
+        text: str,
+        region_height: int,
+        pad: int,
+        max_width: int,
+        horizontal_scale: float = 1.0,
+        font_path: Optional[str] = None,
+    ) -> str:
+        """
+        Возвращает максимальный по длине префикс ``text``, который помещается в ``max_width`` пикселей.
+
+        Пустая строка, если ``max_width`` <= 0. Подбор по длине префикса (символы Unicode).
+        """
+        if max_width <= 0:
+            return ""
+        if not text:
+            return ""
+        if self.measure_text_width(text, region_height, pad, horizontal_scale, font_path) <= max_width:
+            return text
+        lo, hi = 0, len(text)
+        best = ""
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            prefix = text[:mid]
+            w = self.measure_text_width(prefix, region_height, pad, horizontal_scale, font_path)
+            if w <= max_width:
+                best = prefix
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best
+
     def render_left_aligned(
         self,
         text: str,
@@ -441,6 +521,9 @@ class RectMaskPacket:
     `op(2) + x(2) + y(2) + width(2) + height(2) + color(1) + bitmask(N)`.
 
     op_code: 0x0001 — статическая область; 0x0002 — та же упаковка, маска полной ширины текста (бегущая строка).
+
+    Маска: построчное кодирование с выравниванием каждой строки до целого числа байт
+    (см. :func:`bitmask_size`).
     """
 
     op_code: int
@@ -487,8 +570,8 @@ class RectMaskPacket:
         - Яркость <= threshold -> бит 0 (черный)
         - Яркость > threshold -> бит 1 (нечерный)
 
-        Биты записываются последовательно по строкам (row-major),
-        внутри байта используется порядок от старшего бита к младшему (MSB-first).
+        Биты записываются по строкам (сверху вниз); внутри строки слева направо; каждая
+        строка дополняется нулями до целого байта. Внутри байта — MSB-first.
 
         Args:
             x: Координата X области.
@@ -503,15 +586,15 @@ class RectMaskPacket:
         """
         gray = image.convert("L")
         width, height = gray.size
-        mask = bytearray(bitmask_size(width, height))
+        row_bytes = (width + 7) // 8
+        mask = bytearray(row_bytes * height)
 
         pixels = gray.load()
         for py in range(height):
+            row_off = py * row_bytes
             for px in range(width):
-                pixel_index = py * width + px
-                byte_index = pixel_index // 8
-                bit_index_in_byte = 7 - (pixel_index % 8)
-
+                byte_index = row_off + px // 8
+                bit_index_in_byte = 7 - (px % 8)
                 if pixels[px, py] > threshold:
                     mask[byte_index] |= 1 << bit_index_in_byte
 
@@ -600,16 +683,15 @@ class RectMaskPacket:
         pixels = image.load()
         color = COLOR_CODE_TO_RGB.get(self.color_non_black, (255, 255, 255))
 
-        total_pixels = self.width * self.height
-        for pixel_index in range(total_pixels):
-            byte_index = pixel_index // 8
-            bit_index_in_byte = 7 - (pixel_index % 8)
-            is_on = (self.mask[byte_index] >> bit_index_in_byte) & 0x01
-
-            if is_on:
-                py = pixel_index // self.width
-                px = pixel_index % self.width
-                pixels[px, py] = color
+        row_bytes = (self.width + 7) // 8
+        for py in range(self.height):
+            row_off = py * row_bytes
+            for px in range(self.width):
+                byte_index = row_off + px // 8
+                bit_index_in_byte = 7 - (px % 8)
+                is_on = (self.mask[byte_index] >> bit_index_in_byte) & 0x01
+                if is_on:
+                    pixels[px, py] = color
 
         return image
 
@@ -948,7 +1030,7 @@ class ZonedDisplayTablo(AbstractTablo):
 
         for zid in zids:
             z = zones[zid]
-            text = values.get(zid, "")
+            text_raw = values.get(zid, "")
             pt, pr, pb, pl = z.padding.t, z.padding.r, z.padding.b, z.padding.l
             inner_w = max(1, z.area.w - pl - pr)
             inner_h = max(1, z.area.h - pt - pb)
@@ -956,9 +1038,39 @@ class ZonedDisplayTablo(AbstractTablo):
             y0 = z.area.y + pt
             text_pad = min(pt, pb, max(0, inner_h // 2 - 1))
             wire = rgb_index_to_wire_byte(z.fg, self._cfg.color_map, "fg")
-            force_scroll = global_w_overflow and zid in rightmost
+            animate = self._cfg.animate
+            force_scroll = animate and (global_w_overflow and zid in rightmost)
+
+            if not animate:
+                text = self.renderer.truncate_text_to_width(
+                    text_raw,
+                    inner_h,
+                    text_pad,
+                    inner_w,
+                    horizontal_scale=z.text_scale_x,
+                    font_path=font1,
+                )
+                if self._cfg.debug:
+                    LOGGER.info("zone %s text (static, truncated): %r", zid, text)
+                self.render_region(
+                    text,
+                    x0,
+                    y0,
+                    inner_w,
+                    inner_h,
+                    color_non_black=wire,
+                    horizontal_scale=z.text_scale_x,
+                    scroll_if_overflow=False,
+                    text_pad=text_pad,
+                    force_scroll=False,
+                    font_path=font1,
+                )
+                continue
+
+            if self._cfg.debug:
+                LOGGER.info("zone %s text (animate, full): %r", zid, text_raw)
             self.render_region(
-                text,
+                text_raw,
                 x0,
                 y0,
                 inner_w,
