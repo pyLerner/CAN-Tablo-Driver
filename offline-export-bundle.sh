@@ -102,41 +102,21 @@ chmod +x "${BUNDLE_ROOT}/uv/uv" "${BUNDLE_ROOT}/uv/uvx" 2>/dev/null || true
 
 echo "==> Saving uv Python runtimes and cache"
 UV_CACHE_DIR="$(uv cache dir)"
-PYTHON_VERSION_FILE="${PROJECT_DIR}/.python-version"
-UV_PYTHON_BIN=""
-
-if [[ -f "${PYTHON_VERSION_FILE}" ]]; then
-  PYTHON_VERSION_REQ="$(tr -d '[:space:]' < "${PYTHON_VERSION_FILE}")"
-  if [[ -n "${PYTHON_VERSION_REQ}" ]]; then
-    UV_PYTHON_BIN="$(
-      uv python list "${PYTHON_VERSION_REQ}" --only-installed 2>/dev/null \
-      | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
-    )"
-    if [[ -z "${UV_PYTHON_BIN}" ]]; then
-      UV_PYTHON_BIN="$(
-        uv python list "${PYTHON_VERSION_REQ}" 2>/dev/null \
-        | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
-      )"
-    fi
-  fi
-fi
+UV_PYTHON_DIR="$(uv python dir)"
 
 echo "    UV_CACHE_DIR:  ${UV_CACHE_DIR}"
-if [[ -n "${UV_PYTHON_BIN}" ]]; then
-  UV_PYTHON_RUNTIME_DIR="$(cd "$(dirname "${UV_PYTHON_BIN}")/.." && pwd)"
-  UV_PYTHON_RUNTIME_NAME="$(basename "${UV_PYTHON_RUNTIME_DIR}")"
-  echo "    UV_PYTHON_BIN: ${UV_PYTHON_BIN}"
-  echo "    UV_PYTHON_DIR: ${UV_PYTHON_RUNTIME_DIR}"
-  # Preserve runtime directory name so uv can discover it on target host.
-  cp -a "${UV_PYTHON_RUNTIME_DIR}" "${BUNDLE_ROOT}/uv-python/${UV_PYTHON_RUNTIME_NAME}"
-else
-  UV_PYTHON_DIR="$(uv python dir)"
-  echo "WARN: unable to resolve Python from .python-version, fallback to: ${UV_PYTHON_DIR}"
-  if [[ -d "${UV_PYTHON_DIR}" ]] && [[ -n "$(ls -A "${UV_PYTHON_DIR}" 2>/dev/null || true)" ]]; then
-    cp -a "${UV_PYTHON_DIR}/." "${BUNDLE_ROOT}/uv-python/"
-  else
-    echo "WARN: uv Python runtime directory not found: ${UV_PYTHON_DIR}"
-  fi
+echo "    UV_PYTHON_DIR: ${UV_PYTHON_DIR}"
+COPIED_RUNTIMES=0
+if [[ -d "${UV_PYTHON_DIR}" ]]; then
+  for runtime_dir in "${UV_PYTHON_DIR}"/cpython-3*; do
+    if [[ -d "${runtime_dir}" ]]; then
+      cp -a "${runtime_dir}" "${BUNDLE_ROOT}/uv-python/"
+      COPIED_RUNTIMES=1
+    fi
+  done
+fi
+if [[ "${COPIED_RUNTIMES}" -eq 0 ]]; then
+  echo "WARN: no cpython-3* runtimes found in ${UV_PYTHON_DIR}"
 fi
 if [[ -d "${UV_CACHE_DIR}" ]] && [[ -n "$(ls -A "${UV_CACHE_DIR}" 2>/dev/null || true)" ]]; then
   cp -a "${UV_CACHE_DIR}/." "${BUNDLE_ROOT}/uv-cache/"

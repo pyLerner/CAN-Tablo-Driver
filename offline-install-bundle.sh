@@ -9,6 +9,7 @@ TARGET_DIR="$(mkdir -p "$(dirname "${TARGET_DIR}")" && cd "$(dirname "${TARGET_D
 PROJECT_BUNDLE="${SCRIPT_DIR}/project/project.bundle"
 WORKTREE_SNAPSHOT="${SCRIPT_DIR}/project/worktree-snapshot.tar.gz"
 DEFAULT_BRANCH_FILE="${SCRIPT_DIR}/meta/default-branch.txt"
+PYTHON_RUNTIME_NAME_FILE="${SCRIPT_DIR}/meta/python-runtime-name.txt"
 
 UV_TARGET_ROOT="${HOME}/.local/offline-uv"
 UV_BIN_DIR="${UV_TARGET_ROOT}/bin"
@@ -60,6 +61,36 @@ else
   echo "WARN: uv-python directory in bundle is empty"
 fi
 
+# Fix absolute symlinks that may point to donor machine paths.
+python3 - "${UV_PYTHON_DIR}" <<'PY'
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).expanduser()
+if not root.exists():
+    sys.exit(0)
+
+for path in root.rglob("*"):
+    if not path.is_symlink():
+        continue
+    try:
+        target = os.readlink(path)
+    except OSError:
+        continue
+    if not target.startswith("/"):
+        continue
+    marker = "/.local/share/uv/python/"
+    if marker not in target:
+        continue
+    suffix = target.split(marker, 1)[1]
+    local_target = root / suffix
+    if local_target.exists():
+        rel = os.path.relpath(local_target, path.parent)
+        path.unlink()
+        path.symlink_to(rel)
+PY
+
 echo "==> Restoring uv cache"
 if [[ -d "${SCRIPT_DIR}/uv-cache" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/uv-cache" 2>/dev/null || true)" ]]; then
   mkdir -p "${UV_CACHE_DIR}"
@@ -94,6 +125,13 @@ if [[ -z "${PYTHON_VERSION_REQ}" ]]; then
 fi
 echo "    Required version: ${PYTHON_VERSION_REQ}"
 
+if [[ -f "${PYTHON_RUNTIME_NAME_FILE}" ]]; then
+  PY_RUNTIME_NAME="$(tr -d '[:space:]' < "${PYTHON_RUNTIME_NAME_FILE}")"
+  if [[ -n "${PY_RUNTIME_NAME}" ]]; then
+    echo "    Restored runtime: ${PY_RUNTIME_NAME}"
+  fi
+fi
+
 PYTHON_BIN="$(
   uv python list "${PYTHON_VERSION_REQ}" --only-installed 2>/dev/null \
   | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
@@ -106,6 +144,19 @@ if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 echo "    Using Python: ${PYTHON_BIN}"
+
+PYTHON_MM="$(python3 - "${PYTHON_VERSION_REQ}" <<'PY'
+import re
+import sys
+v = sys.argv[1].strip()
+m = re.match(r'^(\d+\.\d+)', v)
+print(m.group(1) if m else v)
+PY
+)"
+if [[ -n "${PYTHON_MM}" ]]; then
+  mkdir -p "${HOME}/.local/bin"
+  ln -sfn "${PYTHON_BIN}" "${HOME}/.local/bin/python${PYTHON_MM}"
+fi
 
 echo "==> Creating virtual environment"
 cd "${TARGET_DIR}"
