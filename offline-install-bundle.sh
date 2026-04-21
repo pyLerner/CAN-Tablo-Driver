@@ -14,6 +14,9 @@ PYTHON_RUNTIME_NAME_FILE="${SCRIPT_DIR}/meta/python-runtime-name.txt"
 UV_TARGET_ROOT="${HOME}/.local/offline-uv"
 UV_BIN_DIR="${UV_TARGET_ROOT}/bin"
 SYSTEMD_DIR="/etc/systemd/system"
+BUNDLE_UV_CACHE_DIR="${SCRIPT_DIR}/uv-cache"
+
+trap 'echo "ERROR: failed at line ${LINENO}" >&2' ERR
 
 need_file() {
   [[ -f "$1" ]] || {
@@ -35,6 +38,33 @@ need_file "${PROJECT_BUNDLE}"
 need_file "${WORKTREE_SNAPSHOT}"
 need_file "${SCRIPT_DIR}/uv/uv"
 
+run_systemctl() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    systemctl "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo systemctl "$@"
+  else
+    echo "ERROR: systemd setup requires root or sudo"
+    exit 1
+  fi
+}
+
+copy_unit() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -f "${src}" ]]; then
+    return 1
+  fi
+  if [[ "${EUID}" -eq 0 ]]; then
+    install -m 644 "${src}" "${dst}"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo install -m 644 "${src}" "${dst}"
+  else
+    echo "ERROR: cannot install ${src} without root/sudo"
+    exit 1
+  fi
+}
+
 echo "==> Selecting uv binary"
 PREFERRED_UV="${HOME}/.local/bin/uv"
 if [[ -x "${PREFERRED_UV}" ]]; then
@@ -50,8 +80,19 @@ else
   chmod +x "${UV_BIN_DIR}/uv" "${UV_BIN_DIR}/uvx" 2>/dev/null || true
   export PATH="${UV_BIN_DIR}:${PATH}"
 fi
+
+# Force strict offline behavior for all uv commands in this script.
+export UV_OFFLINE=1
+
 UV_PYTHON_DIR="$(uv python dir)"
 UV_CACHE_DIR="$(uv cache dir)"
+if [[ -d "${BUNDLE_UV_CACHE_DIR}" ]] && [[ -n "$(ls -A "${BUNDLE_UV_CACHE_DIR}" 2>/dev/null || true)" ]]; then
+  export UV_CACHE_DIR="${BUNDLE_UV_CACHE_DIR}"
+  echo "    Using bundle cache dir: ${UV_CACHE_DIR}"
+else
+  export UV_CACHE_DIR="${UV_CACHE_DIR}"
+  echo "    Using system cache dir: ${UV_CACHE_DIR}"
+fi
 
 echo "==> Restoring uv Python runtimes"
 if [[ -d "${SCRIPT_DIR}/uv-python" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/uv-python" 2>/dev/null || true)" ]]; then
@@ -93,8 +134,7 @@ PY
 
 echo "==> Restoring uv cache"
 if [[ -d "${SCRIPT_DIR}/uv-cache" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/uv-cache" 2>/dev/null || true)" ]]; then
-  mkdir -p "${UV_CACHE_DIR}"
-  cp -a "${SCRIPT_DIR}/uv-cache/." "${UV_CACHE_DIR}/"
+  echo "    Cache is used directly from bundle: ${SCRIPT_DIR}/uv-cache"
 else
   echo "WARN: uv-cache directory in bundle is empty"
 fi
@@ -113,6 +153,30 @@ fi
 
 echo "==> Applying worktree snapshot (includes donor uncommitted files)"
 tar -xzf "${WORKTREE_SNAPSHOT}" -C "${TARGET_DIR}"
+
+echo "==> Installing systemd units (if present)"
+INSTALLED_ANY_UNIT=0
+if copy_unit "${SCRIPT_DIR}/systemd/can0-setup.service" "${SYSTEMD_DIR}/can0-setup.service"; then
+  INSTALLED_ANY_UNIT=1
+fi
+if copy_unit "${SCRIPT_DIR}/systemd/led-tablo.service" "${SYSTEMD_DIR}/led-tablo.service"; then
+  INSTALLED_ANY_UNIT=1
+fi
+
+if [[ "${INSTALLED_ANY_UNIT}" -eq 1 ]]; then
+  run_systemctl daemon-reload
+  if [[ -f "${SCRIPT_DIR}/systemd/can0-setup.service" ]]; then
+    run_systemctl enable can0-setup.service
+    run_systemctl restart can0-setup.service
+  fi
+  if [[ -f "${SCRIPT_DIR}/systemd/led-tablo.service" ]]; then
+    run_systemctl enable led-tablo.service
+    run_systemctl restart led-tablo.service
+  fi
+  run_systemctl --no-pager --full status can0-setup.service led-tablo.service || true
+else
+  echo "WARN: no service unit files found in ${SCRIPT_DIR}/systemd"
+fi
 
 echo "==> Detecting required Python from uv runtimes"
 PYTHON_VERSION_REQ=""
@@ -182,60 +246,9 @@ exec "${SCRIPT_DIR}/.venv/bin/run_api_server" "$@"
 EOF
 chmod +x "${TARGET_DIR}/run_api_server_offline.sh"
 
-run_systemctl() {
-  if [[ "${EUID}" -eq 0 ]]; then
-    systemctl "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo systemctl "$@"
-  else
-    echo "ERROR: systemd setup requires root or sudo"
-    exit 1
-  fi
-}
-
-copy_unit() {
-  local src="$1"
-  local dst="$2"
-  if [[ ! -f "${src}" ]]; then
-    return 1
-  fi
-  if [[ "${EUID}" -eq 0 ]]; then
-    install -m 644 "${src}" "${dst}"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo install -m 644 "${src}" "${dst}"
-  else
-    echo "ERROR: cannot install ${src} without root/sudo"
-    exit 1
-  fi
-}
-
-echo "==> Installing systemd units (if present)"
-INSTALLED_ANY_UNIT=0
-if copy_unit "${SCRIPT_DIR}/systemd/can0-setup.service" "${SYSTEMD_DIR}/can0-setup.service"; then
-  INSTALLED_ANY_UNIT=1
-fi
-if copy_unit "${SCRIPT_DIR}/systemd/led-tablo.service" "${SYSTEMD_DIR}/led-tablo.service"; then
-  INSTALLED_ANY_UNIT=1
-fi
-
-if [[ "${INSTALLED_ANY_UNIT}" -eq 1 ]]; then
-  run_systemctl daemon-reload
-  if [[ -f "${SCRIPT_DIR}/systemd/can0-setup.service" ]]; then
-    run_systemctl enable can0-setup.service
-    run_systemctl restart can0-setup.service
-  fi
-  if [[ -f "${SCRIPT_DIR}/systemd/led-tablo.service" ]]; then
-    run_systemctl enable led-tablo.service
-    run_systemctl restart led-tablo.service
-  fi
-  run_systemctl --no-pager --full status can0-setup.service led-tablo.service || true
-else
-  echo "WARN: no service unit files found in ${SCRIPT_DIR}/systemd"
-fi
-
 echo
 echo "Restore complete."
 echo "Project: ${TARGET_DIR}"
-echo "Bundled uv: ${UV_BIN_DIR}/uv"
+echo "uv: $(command -v uv)"
 echo "Activate venv: source \"${TARGET_DIR}/.venv/bin/activate\""
 echo "Run API: ${TARGET_DIR}/run_api_server_offline.sh"
