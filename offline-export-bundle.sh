@@ -15,6 +15,8 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BUNDLE_ROOT="${OUTPUT_DIR}/${BUNDLE_NAME}-${TIMESTAMP}"
 ARCHIVE_PATH="${BUNDLE_ROOT}.tar.gz"
 
+trap 'echo "ERROR: failed at line ${LINENO}" >&2' ERR
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: '$1' not found in PATH"
@@ -30,6 +32,7 @@ need_cmd python3
 PROJECT_DIR="$(cd "${PROJECT_DIR}" && pwd)"
 OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
 UV_BIN="$(command -v uv)"
+UV_BIN_REAL="$(readlink -f "${UV_BIN}" 2>/dev/null || echo "${UV_BIN}")"
 
 if [[ ! -d "${PROJECT_DIR}" ]]; then
   echo "ERROR: project directory not found: ${PROJECT_DIR}"
@@ -44,7 +47,7 @@ fi
 echo "==> Creating offline bundle"
 echo "    PROJECT_DIR: ${PROJECT_DIR}"
 echo "    OUTPUT_DIR:  ${OUTPUT_DIR}"
-echo "    UV_BIN:      ${UV_BIN}"
+echo "    UV_BIN:      ${UV_BIN_REAL}"
 
 rm -rf "${BUNDLE_ROOT}" "${ARCHIVE_PATH}"
 mkdir -p "${BUNDLE_ROOT}"/{project,uv,uv-cache,uv-python,meta,systemd}
@@ -81,21 +84,51 @@ pathlib.Path(sys.argv[2]).write_text("\n".join(dst) + "\n", encoding="utf-8")
 PY
 
 echo "==> Saving uv binaries"
-cp -a "${UV_BIN}" "${BUNDLE_ROOT}/uv/uv"
+cp -L "${UV_BIN_REAL}" "${BUNDLE_ROOT}/uv/uv"
 if command -v uvx >/dev/null 2>&1; then
-  cp -a "$(command -v uvx)" "${BUNDLE_ROOT}/uv/uvx"
+  UVX_BIN="$(command -v uvx)"
+  UVX_BIN_REAL="$(readlink -f "${UVX_BIN}" 2>/dev/null || echo "${UVX_BIN}")"
+  cp -L "${UVX_BIN_REAL}" "${BUNDLE_ROOT}/uv/uvx"
 fi
 chmod +x "${BUNDLE_ROOT}/uv/uv" "${BUNDLE_ROOT}/uv/uvx" 2>/dev/null || true
 
 echo "==> Saving uv Python runtimes and cache"
-UV_PYTHON_DIR="${HOME}/.local/share/uv/python"
-UV_CACHE_DIR="${HOME}/.cache/uv"
-if [[ -d "${UV_PYTHON_DIR}" ]]; then
-  cp -a "${UV_PYTHON_DIR}/." "${BUNDLE_ROOT}/uv-python/"
-else
-  echo "WARN: uv Python runtime directory not found: ${UV_PYTHON_DIR}"
+UV_CACHE_DIR="$(uv cache dir)"
+PYTHON_VERSION_FILE="${PROJECT_DIR}/.python-version"
+UV_PYTHON_BIN=""
+
+if [[ -f "${PYTHON_VERSION_FILE}" ]]; then
+  PYTHON_VERSION_REQ="$(tr -d '[:space:]' < "${PYTHON_VERSION_FILE}")"
+  if [[ -n "${PYTHON_VERSION_REQ}" ]]; then
+    UV_PYTHON_BIN="$(
+      uv python list "${PYTHON_VERSION_REQ}" --only-installed 2>/dev/null \
+      | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
+    )"
+    if [[ -z "${UV_PYTHON_BIN}" ]]; then
+      UV_PYTHON_BIN="$(
+        uv python list "${PYTHON_VERSION_REQ}" 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
+      )"
+    fi
+  fi
 fi
-if [[ -d "${UV_CACHE_DIR}" ]]; then
+
+echo "    UV_CACHE_DIR:  ${UV_CACHE_DIR}"
+if [[ -n "${UV_PYTHON_BIN}" ]]; then
+  UV_PYTHON_RUNTIME_DIR="$(cd "$(dirname "${UV_PYTHON_BIN}")/.." && pwd)"
+  echo "    UV_PYTHON_BIN: ${UV_PYTHON_BIN}"
+  echo "    UV_PYTHON_DIR: ${UV_PYTHON_RUNTIME_DIR}"
+  cp -a "${UV_PYTHON_RUNTIME_DIR}/." "${BUNDLE_ROOT}/uv-python/"
+else
+  UV_PYTHON_DIR="$(uv python dir)"
+  echo "WARN: unable to resolve Python from .python-version, fallback to: ${UV_PYTHON_DIR}"
+  if [[ -d "${UV_PYTHON_DIR}" ]] && [[ -n "$(ls -A "${UV_PYTHON_DIR}" 2>/dev/null || true)" ]]; then
+    cp -a "${UV_PYTHON_DIR}/." "${BUNDLE_ROOT}/uv-python/"
+  else
+    echo "WARN: uv Python runtime directory not found: ${UV_PYTHON_DIR}"
+  fi
+fi
+if [[ -d "${UV_CACHE_DIR}" ]] && [[ -n "$(ls -A "${UV_CACHE_DIR}" 2>/dev/null || true)" ]]; then
   cp -a "${UV_CACHE_DIR}/." "${BUNDLE_ROOT}/uv-cache/"
 else
   echo "WARN: uv cache directory not found: ${UV_CACHE_DIR}"
@@ -120,8 +153,12 @@ cd <bundle>
 If project path is omitted, default is `./workdir/CAN-Tablo-Driver`.
 EOF
 
-cp -a "${PROJECT_DIR}/offline-install-bundle.sh" "${BUNDLE_ROOT}/offline-install-bundle.sh"
-chmod +x "${BUNDLE_ROOT}/offline-install-bundle.sh"
+if [[ -f "${PROJECT_DIR}/offline-install-bundle.sh" ]]; then
+  cp -a "${PROJECT_DIR}/offline-install-bundle.sh" "${BUNDLE_ROOT}/offline-install-bundle.sh"
+  chmod +x "${BUNDLE_ROOT}/offline-install-bundle.sh"
+else
+  echo "WARN: offline-install-bundle.sh not found in project root"
+fi
 
 echo "==> Packing archive"
 tar -czf "${ARCHIVE_PATH}" -C "${OUTPUT_DIR}" "$(basename "${BUNDLE_ROOT}")"
