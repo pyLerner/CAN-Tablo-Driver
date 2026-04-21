@@ -12,8 +12,6 @@ DEFAULT_BRANCH_FILE="${SCRIPT_DIR}/meta/default-branch.txt"
 
 UV_TARGET_ROOT="${HOME}/.local/offline-uv"
 UV_BIN_DIR="${UV_TARGET_ROOT}/bin"
-UV_PYTHON_DIR="${HOME}/.local/share/uv/python"
-UV_CACHE_DIR="${HOME}/.cache/uv"
 SYSTEMD_DIR="/etc/systemd/system"
 
 need_file() {
@@ -36,16 +34,23 @@ need_file "${PROJECT_BUNDLE}"
 need_file "${WORKTREE_SNAPSHOT}"
 need_file "${SCRIPT_DIR}/uv/uv"
 
-echo "==> Restoring uv binary"
-mkdir -p "${UV_BIN_DIR}"
-cp -a "${SCRIPT_DIR}/uv/uv" "${UV_BIN_DIR}/uv"
-if [[ -f "${SCRIPT_DIR}/uv/uvx" ]]; then
-  cp -a "${SCRIPT_DIR}/uv/uvx" "${UV_BIN_DIR}/uvx"
+echo "==> Selecting uv binary"
+PREFERRED_UV="${HOME}/.local/bin/uv"
+if [[ -x "${PREFERRED_UV}" ]]; then
+  echo "    Using target uv: ${PREFERRED_UV}"
+  export PATH="${HOME}/.local/bin:${PATH}"
+else
+  echo "    Target uv not found, restoring bundled uv"
+  mkdir -p "${UV_BIN_DIR}"
+  cp -a "${SCRIPT_DIR}/uv/uv" "${UV_BIN_DIR}/uv"
+  if [[ -f "${SCRIPT_DIR}/uv/uvx" ]]; then
+    cp -a "${SCRIPT_DIR}/uv/uvx" "${UV_BIN_DIR}/uvx"
+  fi
+  chmod +x "${UV_BIN_DIR}/uv" "${UV_BIN_DIR}/uvx" 2>/dev/null || true
+  export PATH="${UV_BIN_DIR}:${PATH}"
 fi
-chmod +x "${UV_BIN_DIR}/uv" "${UV_BIN_DIR}/uvx" 2>/dev/null || true
-
-# Use bundled uv first in this script.
-export PATH="${UV_BIN_DIR}:${PATH}"
+UV_PYTHON_DIR="$(uv python dir)"
+UV_CACHE_DIR="$(uv cache dir)"
 
 echo "==> Restoring uv Python runtimes"
 if [[ -d "${SCRIPT_DIR}/uv-python" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/uv-python" 2>/dev/null || true)" ]]; then
@@ -78,20 +83,26 @@ fi
 echo "==> Applying worktree snapshot (includes donor uncommitted files)"
 tar -xzf "${WORKTREE_SNAPSHOT}" -C "${TARGET_DIR}"
 
-echo "==> Detecting Python from restored uv runtimes"
-PYTHON_BIN="$(uv python list --only-installed | awk 'NR==1{print $NF}')"
-if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
-  # Fallback: search manually in restored uv python dir without extra tools.
-  for candidate in "${UV_PYTHON_DIR}"/*/bin/python*; do
-    if [[ -x "${candidate}" ]]; then
-      PYTHON_BIN="${candidate}"
-      break
-    fi
-  done
+echo "==> Detecting required Python from uv runtimes"
+PYTHON_VERSION_REQ=""
+if [[ -f "${TARGET_DIR}/.python-version" ]]; then
+  PYTHON_VERSION_REQ="$(tr -d '[:space:]' < "${TARGET_DIR}/.python-version")"
 fi
+if [[ -z "${PYTHON_VERSION_REQ}" ]]; then
+  echo "ERROR: .python-version not found or empty in ${TARGET_DIR}"
+  exit 1
+fi
+echo "    Required version: ${PYTHON_VERSION_REQ}"
+
+PYTHON_BIN="$(
+  uv python list "${PYTHON_VERSION_REQ}" --only-installed 2>/dev/null \
+  | awk '{for(i=1;i<=NF;i++) if($i ~ /\/bin\/python([0-9.]*)?$/){print $i; exit}}'
+)"
 if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
-  echo "ERROR: unable to locate restored Python interpreter"
-  echo "       Check ${UV_PYTHON_DIR} and set up Python manually."
+  echo "ERROR: uv does not see required Python ${PYTHON_VERSION_REQ} after restore"
+  echo "       uv python dir: ${UV_PYTHON_DIR}"
+  echo "       Available in uv list:"
+  uv python list --only-installed || true
   exit 1
 fi
 echo "    Using Python: ${PYTHON_BIN}"

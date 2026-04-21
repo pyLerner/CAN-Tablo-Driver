@@ -124,9 +124,11 @@ fi
 echo "    UV_CACHE_DIR:  ${UV_CACHE_DIR}"
 if [[ -n "${UV_PYTHON_BIN}" ]]; then
   UV_PYTHON_RUNTIME_DIR="$(cd "$(dirname "${UV_PYTHON_BIN}")/.." && pwd)"
+  UV_PYTHON_RUNTIME_NAME="$(basename "${UV_PYTHON_RUNTIME_DIR}")"
   echo "    UV_PYTHON_BIN: ${UV_PYTHON_BIN}"
   echo "    UV_PYTHON_DIR: ${UV_PYTHON_RUNTIME_DIR}"
-  cp -a "${UV_PYTHON_RUNTIME_DIR}/." "${BUNDLE_ROOT}/uv-python/"
+  # Preserve runtime directory name so uv can discover it on target host.
+  cp -a "${UV_PYTHON_RUNTIME_DIR}" "${BUNDLE_ROOT}/uv-python/${UV_PYTHON_RUNTIME_NAME}"
 else
   UV_PYTHON_DIR="$(uv python dir)"
   echo "WARN: unable to resolve Python from .python-version, fallback to: ${UV_PYTHON_DIR}"
