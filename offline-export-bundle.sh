@@ -39,7 +39,7 @@ if [[ ! -d "${PROJECT_DIR}" ]]; then
   exit 1
 fi
 
-if [[ ! -d "${PROJECT_DIR}/.git" ]]; then
+if ! git -C "${PROJECT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "ERROR: ${PROJECT_DIR} is not a git repository"
   exit 1
 fi
@@ -58,8 +58,16 @@ git -C "${PROJECT_DIR}" rev-parse --abbrev-ref HEAD > "${BUNDLE_ROOT}/meta/defau
 git -C "${PROJECT_DIR}" status --porcelain > "${BUNDLE_ROOT}/meta/dirty-status.txt" || true
 
 echo "==> Saving source snapshot (for uncommitted donor changes)"
+TAR_SNAPSHOT_EXCLUDES=(--exclude='.git')
+if [[ "${BUNDLE_ROOT}" == "${PROJECT_DIR}"/* ]]; then
+  # Avoid recursive archiving when bundle is created inside project dir.
+  TAR_SNAPSHOT_EXCLUDES+=(--exclude="${BUNDLE_ROOT#${PROJECT_DIR}/}")
+fi
+if [[ "${ARCHIVE_PATH}" == "${PROJECT_DIR}"/* ]]; then
+  TAR_SNAPSHOT_EXCLUDES+=(--exclude="${ARCHIVE_PATH#${PROJECT_DIR}/}")
+fi
 tar -czf "${BUNDLE_ROOT}/project/worktree-snapshot.tar.gz" \
-  --exclude='.git' \
+  "${TAR_SNAPSHOT_EXCLUDES[@]}" \
   -C "${PROJECT_DIR}" .
 
 echo "==> Exporting requirements from uv.lock"
