@@ -7,13 +7,13 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-USER="$USER"
+USER="teamhd"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="/home/${USER}/CAN-Tablo-Driver"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # REPO_URL="$(git -C "${SCRIPT_DIR}" remote get-url origin 2>/dev/null || true)"
-REPO_URL="https://github.com/${USER}/CAN-Tablo-Driver.git"
+REPO_URL="https://github.com/pyLerner/CAN-Tablo-Driver.git"
 
 echo "[1/6] Sync project to ${APP_DIR}"
 if [[ -d "${APP_DIR}/.git" ]]; then
