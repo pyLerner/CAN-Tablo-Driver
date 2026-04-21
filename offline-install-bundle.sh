@@ -14,6 +14,7 @@ UV_TARGET_ROOT="${HOME}/.local/offline-uv"
 UV_BIN_DIR="${UV_TARGET_ROOT}/bin"
 UV_PYTHON_DIR="${HOME}/.local/share/uv/python"
 UV_CACHE_DIR="${HOME}/.cache/uv"
+SYSTEMD_DIR="/etc/systemd/system"
 
 need_file() {
   [[ -f "$1" ]] || {
@@ -118,6 +119,57 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "${SCRIPT_DIR}/.venv/bin/run_api_server" "$@"
 EOF
 chmod +x "${TARGET_DIR}/run_api_server_offline.sh"
+
+run_systemctl() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    systemctl "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo systemctl "$@"
+  else
+    echo "ERROR: systemd setup requires root or sudo"
+    exit 1
+  fi
+}
+
+copy_unit() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -f "${src}" ]]; then
+    return 1
+  fi
+  if [[ "${EUID}" -eq 0 ]]; then
+    install -m 644 "${src}" "${dst}"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo install -m 644 "${src}" "${dst}"
+  else
+    echo "ERROR: cannot install ${src} without root/sudo"
+    exit 1
+  fi
+}
+
+echo "==> Installing systemd units (if present)"
+INSTALLED_ANY_UNIT=0
+if copy_unit "${SCRIPT_DIR}/systemd/can0-setup.service" "${SYSTEMD_DIR}/can0-setup.service"; then
+  INSTALLED_ANY_UNIT=1
+fi
+if copy_unit "${SCRIPT_DIR}/systemd/led-tablo.service" "${SYSTEMD_DIR}/led-tablo.service"; then
+  INSTALLED_ANY_UNIT=1
+fi
+
+if [[ "${INSTALLED_ANY_UNIT}" -eq 1 ]]; then
+  run_systemctl daemon-reload
+  if [[ -f "${SCRIPT_DIR}/systemd/can0-setup.service" ]]; then
+    run_systemctl enable can0-setup.service
+    run_systemctl restart can0-setup.service
+  fi
+  if [[ -f "${SCRIPT_DIR}/systemd/led-tablo.service" ]]; then
+    run_systemctl enable led-tablo.service
+    run_systemctl restart led-tablo.service
+  fi
+  run_systemctl --no-pager --full status can0-setup.service led-tablo.service || true
+else
+  echo "WARN: no service unit files found in ${SCRIPT_DIR}/systemd"
+fi
 
 echo
 echo "Restore complete."

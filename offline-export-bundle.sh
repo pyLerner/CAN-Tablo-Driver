@@ -47,7 +47,7 @@ echo "    OUTPUT_DIR:  ${OUTPUT_DIR}"
 echo "    UV_BIN:      ${UV_BIN}"
 
 rm -rf "${BUNDLE_ROOT}" "${ARCHIVE_PATH}"
-mkdir -p "${BUNDLE_ROOT}"/{project,uv,uv-cache,uv-python,meta}
+mkdir -p "${BUNDLE_ROOT}"/{project,uv,uv-cache,uv-python,meta,systemd}
 
 echo "==> Saving git repository with all branches and tags"
 git -C "${PROJECT_DIR}" bundle create "${BUNDLE_ROOT}/project/project.bundle" --all
@@ -103,6 +103,8 @@ fi
 
 [[ -f "${PROJECT_DIR}/pyproject.toml" ]] && cp "${PROJECT_DIR}/pyproject.toml" "${BUNDLE_ROOT}/project/"
 [[ -f "${PROJECT_DIR}/uv.lock" ]] && cp "${PROJECT_DIR}/uv.lock" "${BUNDLE_ROOT}/project/"
+[[ -f "${PROJECT_DIR}/can0-setup.service" ]] && cp "${PROJECT_DIR}/can0-setup.service" "${BUNDLE_ROOT}/systemd/"
+[[ -f "${PROJECT_DIR}/led-tablo.service" ]] && cp "${PROJECT_DIR}/led-tablo.service" "${BUNDLE_ROOT}/systemd/"
 
 cat > "${BUNDLE_ROOT}/INSTALL.md" <<'EOF'
 # Offline restore instructions
