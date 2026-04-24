@@ -258,6 +258,7 @@ def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: in
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
+    #TODO: сделать переключатель для уровня логирования в конфигурационном файле config.toml
     LOGGER.setLevel(logging.INFO)
     LOGGER.handlers.clear()
     LOGGER.addHandler(rotating_handler)
@@ -625,8 +626,10 @@ class RectMaskPacket:
         payload += u16le(self.height)
         payload.append(self.color_non_black & 0xFF)
         payload += self.mask
-        return bytes(payload)
 
+        #TODO: сделать переключатель для логирования в конфигурационном файле config.toml
+        LOGGER.debug(f"op_code: {self.op_code:#06x}, x: {self.x}, y: {self.y}, width: {self.width}, height: {self.height}, color_non_black: {self.color_non_black}, mask: {len(self.mask)} bytes")
+        return bytes(payload)
     @classmethod
     def from_payload(cls, payload: bytes) -> "RectMaskPacket":
         """
