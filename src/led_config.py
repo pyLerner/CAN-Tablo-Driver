@@ -54,7 +54,7 @@ def default_color_map() -> dict[str, tuple[int, int, int]]:
     """Слоты 0 и 2 — чёрный и жёлтый на шине; остальные — для примера."""
     return {
         "0": RGB_BLACK,
-        "1": (255, 255, 255),
+        "1": RGB_WHITE,
         "2": RGB_YELLOW,
         "3": (255, 0, 0),   # RED
         "4": (0, 255, 0),   # GREEN
