@@ -55,7 +55,7 @@ padding = { t = 2, r = 2, b = 2, l = 2 }
 
 [display.2]
 bg = 0
-fg = 3
+fg = 1
 font = 1
 text_scale_x = 1.0
 area = { x = 80, y = 0, w = 176, h = 32 }

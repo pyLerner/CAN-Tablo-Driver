@@ -95,6 +95,8 @@ def rgb_index_to_wire_byte(
         return COLOR_GREEN
     if rgb_tuple_matches(rgb, RGB_BLUE):
         return COLOR_BLUE
+    if rgb_tuple_matches(rgb, RGB_WHITE):
+        return COLOR_WHITE
     return COLOR_YELLOW if role == "fg" else COLOR_BLACK
 
 
