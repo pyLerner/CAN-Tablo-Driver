@@ -54,20 +54,20 @@ def default_color_map() -> dict[str, tuple[int, int, int]]:
     """Слоты 0 и 2 — чёрный и жёлтый на шине; остальные — для примера."""
     return {
         "0": RGB_BLACK,
-        "1": (255, 255, 255),
+        "1": RGB_WHITE,
         "2": RGB_YELLOW,
-        "3": (255, 0, 0),   # RED
-        "4": (0, 255, 0),   # GREEN
-        "5": (0, 0, 255),   # BLUE
-        "6": (0, 255, 255), # CYAN
-        "7": (255, 0, 255), # MAGENTA
-        "8": (128, 128, 128), # GRAY
-        "9": (200, 200, 200), # LIGHT GRAY
+        "3": RGB_RED,          # RED
+        "4": RGB_GREEN,        # GREEN
+        "5": RGB_BLUE,         # BLUE
+        "6": RGB_CYAN,         # CYAN
+        "7": RGB_MAGENTA,      # MAGENTA
+        "8": (128, 128, 128),  # GRAY
+        "9": (200, 200, 200),  # LIGHT GRAY
         "10": (100, 100, 255), # LIGHT BLUE
-        "11": (255, 200, 0), # ORANGE
-        "12": (0, 128, 0), # LIGHT GREEN
-        "13": (128, 0, 0), # DARK RED
-        "14": (64, 64, 64), # DARK GRAY
+        "11": (255, 200, 0),   # ORANGE
+        "12": (0, 128, 0),     # LIGHT GREEN
+        "13": (128, 0, 0),     # DARK RED
+        "14": (64, 64, 64),    # DARK GRAY
         "15": (220, 220, 220), # LIGHT GRAY
     }
 
@@ -95,6 +95,8 @@ def rgb_index_to_wire_byte(
         return COLOR_GREEN
     if rgb_tuple_matches(rgb, RGB_BLUE):
         return COLOR_BLUE
+    if rgb_tuple_matches(rgb, RGB_WHITE):
+        return COLOR_WHITE
     return COLOR_YELLOW if role == "fg" else COLOR_BLACK
 
 
