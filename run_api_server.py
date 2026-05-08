@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # Репозиторий: рядом с run_api_server.py лежит каталог src/.
-# Установка через wheel: модуль в site-packages — корень приложения задаётся CAN_TABLO_HOME (в Docker: /opt/can-tablo).
+# Установка через wheel: модуль в site-packages — корень приложения задаётся CAN_TABLO_HOME (в Docker: /app).
 _here = Path(__file__).resolve().parent
 if (_here / "src").is_dir():
     _ROOT = _here
