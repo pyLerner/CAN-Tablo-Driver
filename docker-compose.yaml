@@ -28,12 +28,12 @@ services:
 
     environment:
       TZ: UTC
-      CAN_TABLO_HOME: /opt/can-tablo
-      UV_PROJECT: /opt/can-tablo
+      CAN_TABLO_HOME: /opt/can-tablo-driver
+      UV_PROJECT: /opt/can-tablo-driver
 
     volumes:
-      - ./docker/etc:/opt/can-tablo/etc:ro
-      - ./docker/data:/opt/can-tablo/data:rw
+      - ./docker/etc:/opt/can-tablo-driver/etc:ro
+      - ./docker/data:/opt/can-tablo-driver/data:rw
 
     user: "1000:1000"
     # group_add:
