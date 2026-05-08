@@ -14,7 +14,6 @@ services:
     environment:
       TZ: UTC
       CAN_TABLO_HOME: /app
-      UV_PROJECT: /app
       CAN_IFACE: can0
       CAN_WAIT_SECONDS: "2"
     volumes:
@@ -22,4 +21,4 @@ services:
       - /opt/can-tablo-driver/etc:/app/etc:rw
       - /opt/can-tablo-driver/logs:/app/logs:rw
     user: "1000:1000"
-    command: ["uv", "run", "--no-sync", "run_api_server.py", "--config", "/app/etc/config.toml"]
+    command: ["python", "run_api_server.py", "--config", "/app/etc/config.toml"]

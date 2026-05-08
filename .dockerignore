@@ -25,8 +25,15 @@ build/
 
 # Тесты не копируем в образ рантайма
 tests/
+docs/
+tmp/
+.vscode/
+.idea/
 
 # Прочие крупные артефакты
 *.log
 coverage.xml
 htmlcov/
+agent-transcripts/
+mcps/
+.cursor/plans/

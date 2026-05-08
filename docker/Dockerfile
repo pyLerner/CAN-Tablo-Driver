@@ -1,53 +1,45 @@
-FROM debian:bookworm-slim AS builder
+FROM python:3.13-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_PYTHON_INSTALL_DIR=/app/.uv-python
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        libfreetype6 \
-        libjpeg62-turbo \
-        libopenjp2-7 \
-        zlib1g \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml /app/
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN python - <<'PY'
+import pathlib
+import tomllib
 
-RUN uv python install 3.13
+data = tomllib.loads(pathlib.Path("/app/pyproject.toml").read_text(encoding="utf-8"))
+deps = data.get("project", {}).get("dependencies", [])
+pathlib.Path("/app/requirements.txt").write_text("\n".join(deps) + "\n", encoding="utf-8")
+PY
 
-COPY pyproject.toml uv.lock README.md /app/
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
+    && /opt/venv/bin/pip install -r /app/requirements.txt
+
 COPY run_api_server.py /app/
 COPY src /app/src
 
-RUN uv sync --frozen --no-dev
-
-RUN uv cache prune \
-    && rm -rf /root/.cache/uv /tmp/uv-* 2>/dev/null || true
-
-FROM debian:bookworm-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
     CAN_TABLO_HOME=/app \
-    UV_PROJECT=/app \
-    UV_PYTHON_INSTALL_DIR=/app/.uv-python \
-    UV_NO_CACHE=1 \
-    PATH="/app/.venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        iproute2 \
         libfreetype6 \
         libjpeg62-turbo \
         libopenjp2-7 \
@@ -55,20 +47,18 @@ RUN apt-get update \
         tzdata \
     && ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime \
     && echo "Etc/UTC" > /etc/timezone \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-COPY --from=builder /app/.uv-python /app/.uv-python
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/pyproject.toml /app/uv.lock /app/
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/run_api_server.py /app/
 COPY --from=builder /app/src /app/src
 COPY docker/entrypoint.sh /app/entrypoint.sh
 
 RUN chmod +x /app/entrypoint.sh \
     && useradd --uid 1000 --create-home --shell /usr/sbin/nologin cantablo \
-    && chown -R cantablo:cantablo /app
+    && chown -R cantablo:cantablo /app /opt/venv
 
 USER cantablo
 

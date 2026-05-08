@@ -188,12 +188,12 @@ uvicorn api_app:app --host 0.0.0.0 --port 8000
 
 ## Docker (Compose)
 
-Образ: минимальный `debian:bookworm-slim`, зависимости через `uv sync --frozen`, рабочий каталог `/opt/can-tablo`, часовой пояс **UTC**, процесс под пользователем UID 1000.
+Образ: минимальный `python:3.13-slim`, runtime-зависимости генерируются из `pyproject.toml` в `requirements.txt` (без dev), рабочий каталог `/app`, часовой пояс **UTC**, процесс под пользователем UID 1000.
 
 **Подготовка**
 
 1. Скопируйте пример конфигурации: `cp docker/etc/config.example.toml docker/etc/config.toml` и при необходимости отредактируйте CAN ID и зоны.
-2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs` — пути в `config.toml` должны совпадать с `/opt/can-tablo/data/...` (см. пример).
+2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs` — пути в `config.toml` должны совпадать с `/app/data/...` (см. пример).
 
 **Сборка и запуск**
 
@@ -201,15 +201,15 @@ uvicorn api_app:app --host 0.0.0.0 --port 8000
 docker compose up --build
 ```
 
-В [compose.yaml](compose.yaml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Дополнительные группы (`dialout`) и проброс `/dev/...` настройте под вашу систему (комментарии в файле).
+В [compose.yaml](compose.yaml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Интерфейс `can0` настраивается на хосте; внутри контейнера `iproute2` не используется.
 
 **Точка входа в образе**
 
 ```text
-uv run --no-sync run_api_server --config /opt/can-tablo/etc/config.toml
+python run_api_server.py --config /app/etc/config.toml
 ```
 
-Конфиг монтируется с хоста: `./docker/etc` → `/opt/can-tablo/etc` (только чтение), данные: `./docker/data` → `/opt/can-tablo/data`.
+Конфиг монтируется с хоста: `./docker/etc` → `/app/etc`, данные: `./docker/data` → `/app/data`.
 
 
 ---
