@@ -22,4 +22,4 @@ services:
       - /opt/can-tablo-driver/etc:/app/etc:rw
       - /opt/can-tablo-driver/logs:/app/logs:rw
     user: "1000:1000"
-    command: ["uv", "run", "--no-sync", "run_api_server.py", "--config", "/app/etc/can-tablo-driver-config.toml"]
+    command: ["uv", "run", "--no-sync", "run_api_server.py", "--config", "/app/etc/config.toml"]

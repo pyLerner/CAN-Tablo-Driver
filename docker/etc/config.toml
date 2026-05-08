@@ -17,14 +17,14 @@ use_stack_sleep_time = true
 loop_sleep_sec = 0.00001
 
 [logs]
-dir = "/opt/can-tablo/data/logs"
+dir = "/app/data/logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
 
 [TextIn]
-path = "/opt/can-tablo/data/text-in.json"
-font = "/opt/can-tablo/data/DejaVuSans.ttf"
+path = "/app/data/text-in.json"
+font = "/app/data/DejaVuSans.ttf"
 
 [api-server]
 host = "0.0.0.0"

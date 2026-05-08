@@ -10,4 +10,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${PROJECT_ROOT}"
-docker compose -f docker/docker-compose.yml build --no-cache can-tablo-api
+docker build --no-cache -f docker/Dockerfile -t can-tablo-driver:latest .
