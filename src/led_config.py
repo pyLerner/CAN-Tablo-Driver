@@ -240,6 +240,16 @@ def _load_font_paths(base_dir: Path, text_in_font: Path, raw: dict[str, Any]) ->
     return paths
 
 
+SendOnDuplicate = Literal["skip", "send"]
+
+
+def _parse_send_on_duplicate(raw: Any) -> SendOnDuplicate:
+    value = str(raw).strip().lower()
+    if value not in ("skip", "send"):
+        raise ValueError(f"[send].on_duplicate должен быть 'skip' или 'send', получено: {raw!r}")
+    return value  # type: ignore[return-value]
+
+
 @dataclass
 class MultiLedConfig:
     """Полная конфигурация сервиса (одно табло)."""
@@ -269,6 +279,8 @@ class MultiLedConfig:
     font_paths: dict[int, Path] = field(default_factory=dict)
     animate: bool = True
     debug: bool = False
+    send_min_interval_ms: int = 0
+    send_on_duplicate: SendOnDuplicate = "skip"
 
 
 def load_multi_led_config(config_path: Path) -> MultiLedConfig:
@@ -281,6 +293,7 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
     logs_cfg = raw.get("logs", {})
     text_in_cfg = raw.get("TextIn", {})
     api_sec = raw.get("api-server", {})
+    send_cfg = raw.get("send", {})
     display_sec = raw.get("display")
 
     iso_tp_params = {
@@ -310,6 +323,8 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
         api_server_host=str(api_sec.get("host", "0.0.0.0")),
         api_server_port=int(api_sec.get("port", 8000)),
         font_paths=font_paths,
+        send_min_interval_ms=max(0, int(send_cfg.get("min_interval", 0))),
+        send_on_duplicate=_parse_send_on_duplicate(send_cfg.get("on_duplicate", "skip")),
     )
 
     if not isinstance(display_sec, dict):
@@ -403,6 +418,10 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
         "api-server": {
             "host": cfg.api_server_host,
             "port": cfg.api_server_port,
+        },
+        "send": {
+            "min_interval": cfg.send_min_interval_ms,
+            "on_duplicate": cfg.send_on_duplicate,
         },
     }
     if fonts_out:

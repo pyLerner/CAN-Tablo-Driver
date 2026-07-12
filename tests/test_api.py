@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +19,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(SRC / "config.toml"))
+    mock_scheduler = MagicMock()
+    mock_scheduler.stop = AsyncMock()
+    with patch("api_app.DisplaySendScheduler", return_value=mock_scheduler):
+        with TestClient(create_app(SRC / "config.toml")) as c:
+            c._mock_scheduler = mock_scheduler  # type: ignore[attr-defined]
+            yield c
 
 
 def test_ping(client: TestClient) -> None:
@@ -32,14 +37,14 @@ def test_ping(client: TestClient) -> None:
     assert data["display-id"] == "front-display"
 
 
-@patch("api_app.send_display_values")
-def test_values_update_accepted(_mock_send: object, client: TestClient) -> None:
+def test_values_update_accepted(client: TestClient) -> None:
     r = client.put(
         "/api/leddisplays/v1/values/update",
         json={"values": {"1": "567А"}},
     )
     assert r.status_code == 200
     assert r.json()["status"] == "accepted"
+    client._mock_scheduler.submit.assert_called_once_with({"1": "567А"})  # type: ignore[attr-defined]
 
 
 def test_config_set_noop_empty_body(client: TestClient) -> None:

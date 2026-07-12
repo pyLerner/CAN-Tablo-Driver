@@ -63,6 +63,10 @@ font = "../data/DejaVuSans.ttf"
 host = "0.0.0.0"
 port = 7070
 
+[send]
+min_interval = 300
+on_duplicate = "skip"
+
 [display]
 display-id = "side-display-1"
 

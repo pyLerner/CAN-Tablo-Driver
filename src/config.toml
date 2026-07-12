@@ -28,6 +28,10 @@ font = "../data/DejaVuSans.ttf"
 host = "0.0.0.0"
 port = 7070
 
+[send]
+min_interval = 0
+on_duplicate = "skip"
+
 [display]
 display-id = "front-display"
 
