@@ -241,6 +241,9 @@ def _load_font_paths(base_dir: Path, text_in_font: Path, raw: dict[str, Any]) ->
 
 
 SendOnDuplicate = Literal["skip", "send"]
+LogLevelName = Literal["DEBUG", "INFO", "WARNING"]
+
+_VALID_LOGLEVELS = frozenset({"DEBUG", "INFO", "WARNING"})
 
 
 def _parse_send_on_duplicate(raw: Any) -> SendOnDuplicate:
@@ -248,6 +251,36 @@ def _parse_send_on_duplicate(raw: Any) -> SendOnDuplicate:
     if value not in ("skip", "send"):
         raise ValueError(f"[send].on_duplicate должен быть 'skip' или 'send', получено: {raw!r}")
     return value  # type: ignore[return-value]
+
+
+def parse_loglevel_name(raw: Any) -> LogLevelName:
+    """Парсит имя уровня лога; допустимы DEBUG|INFO|WARNING (регистр не важен)."""
+    name = str(raw).strip().upper()
+    if name not in _VALID_LOGLEVELS:
+        raise ValueError(
+            f"[logs].loglevel должен быть DEBUG|INFO|WARNING, получено: {raw!r}"
+        )
+    return name  # type: ignore[return-value]
+
+
+def resolve_log_level(
+    loglevel_raw: Any | None,
+    *,
+    debug: bool | None = None,
+    debug_key_present: bool = False,
+) -> LogLevelName:
+    """
+    Итоговый уровень логгера.
+
+    1. Явный [logs].loglevel, если задан и валиден.
+    2. Иначе display.debug: true→DEBUG, false→INFO (если ключ debug был в конфиге).
+    3. Иначе INFO.
+    """
+    if loglevel_raw is not None and str(loglevel_raw).strip() != "":
+        return parse_loglevel_name(loglevel_raw)
+    if debug_key_present:
+        return "DEBUG" if bool(debug) else "INFO"
+    return "INFO"
 
 
 @dataclass
@@ -279,6 +312,7 @@ class MultiLedConfig:
     font_paths: dict[int, Path] = field(default_factory=dict)
     animate: bool = True
     debug: bool = False
+    log_level: LogLevelName = "INFO"
     send_min_interval_ms: int = 0
     send_on_duplicate: SendOnDuplicate = "skip"
 
@@ -338,7 +372,14 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
     cfg.color_map = _parse_color_map_from_display(display_sec)
     cfg.zones = _load_zones_from_display(display_sec)
     cfg.animate = bool(display_sec.get("animate", True))
-    cfg.debug = bool(display_sec.get("debug", False))
+    debug_key_present = "debug" in display_sec
+    cfg.debug = bool(display_sec["debug"]) if debug_key_present else False
+    loglevel_raw = logs_cfg.get("loglevel") if "loglevel" in logs_cfg else None
+    cfg.log_level = resolve_log_level(
+        loglevel_raw,
+        debug=cfg.debug if debug_key_present else None,
+        debug_key_present=debug_key_present,
+    )
 
     return cfg
 
@@ -409,6 +450,7 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
             "file": cfg.log_filename,
             "count": cfg.log_backup_count,
             "max_size": cfg.log_max_bytes,
+            "loglevel": cfg.log_level,
         },
         "TextIn": {
             "path": _short_path(cfg.text_in_path, base),

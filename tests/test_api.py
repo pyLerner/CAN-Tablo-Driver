@@ -60,6 +60,17 @@ def test_config_set_body_maps_animate_debug() -> None:
     upd = _config_set_body_to_toml_updates(body)
     assert upd["display"]["animate"] is False
     assert upd["display"]["debug"] is True
+    # debug без loglevel → logs.loglevel DEBUG (совместимость)
+    assert upd["logs"]["loglevel"] == "DEBUG"
+
+
+def test_config_set_body_loglevel_wins_over_debug() -> None:
+    from api_app import ConfigSetBody, _config_set_body_to_toml_updates
+
+    body = ConfigSetBody(debug=True, loglevel="WARNING")
+    upd = _config_set_body_to_toml_updates(body)
+    assert upd["logs"]["loglevel"] == "WARNING"
+    assert upd["display"]["debug"] is True
 
 
 def test_led_config_merge() -> None:

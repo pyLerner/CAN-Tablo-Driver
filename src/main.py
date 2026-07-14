@@ -229,7 +229,13 @@ def _legacy_pack_mask_from_image_continuous_unused(
     return bytes(mask)
 
 
-def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: int) -> None:
+def setup_logging(
+    log_dir: Path,
+    filename: str,
+    max_bytes: int,
+    backup_count: int,
+    level: int | str = logging.INFO,
+) -> None:
     """
     Настраивает логирование в файл с ротацией.
 
@@ -238,6 +244,7 @@ def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: in
         filename: Имя основного файла лога.
         max_bytes: Максимальный размер файла до ротации.
         backup_count: Количество архивных файлов.
+        level: Уровень логгера (имя DEBUG|INFO|WARNING или int).
     """
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / filename
@@ -258,8 +265,12 @@ def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: in
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    #TODO: сделать переключатель для уровня логирования в конфигурационном файле config.toml
-    LOGGER.setLevel(logging.INFO)
+    if isinstance(level, str):
+        level = getattr(logging, level.upper(), logging.INFO)
+
+    LOGGER.setLevel(level)
+    rotating_handler.setLevel(level)
+    console_handler.setLevel(level)
     LOGGER.handlers.clear()
     LOGGER.addHandler(rotating_handler)
     LOGGER.addHandler(console_handler)
@@ -1053,8 +1064,7 @@ class ZonedDisplayTablo(AbstractTablo):
                     horizontal_scale=z.text_scale_x,
                     font_path=font1,
                 )
-                if self._cfg.debug:
-                    LOGGER.info("zone %s text (static, truncated): %r", zid, text)
+                LOGGER.debug("zone %s text (static, truncated): %r", zid, text)
                 self.render_region(
                     text,
                     x0,
@@ -1070,8 +1080,7 @@ class ZonedDisplayTablo(AbstractTablo):
                 )
                 continue
 
-            if self._cfg.debug:
-                LOGGER.info("zone %s text (animate, full): %r", zid, text_raw)
+            LOGGER.debug("zone %s text (animate, full): %r", zid, text_raw)
             self.render_region(
                 text_raw,
                 x0,
@@ -1269,6 +1278,7 @@ if __name__ == "__main__":
             filename=_cfg.log_filename,
             max_bytes=_cfg.log_max_bytes,
             backup_count=_cfg.log_backup_count,
+            level=_cfg.log_level,
         )
         LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
         run_sender(config_path)
@@ -1281,6 +1291,7 @@ if __name__ == "__main__":
             filename=_cfg.log_filename,
             max_bytes=_cfg.log_max_bytes,
             backup_count=_cfg.log_backup_count,
+            level=_cfg.log_level,
         )
         LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
         run_api_server(_cfg)

@@ -5,22 +5,24 @@
 # =============================================================================
 
 [can]
-channel = "vcan0"
+#channel = "vcan0"
+channel = "can0"
 bitrate = 500000
 
 [iso-tp]
-rx_flowcontrol_timeout = 5000
-rx_consecutive_frame_timeout = 5000
+rx_flowcontrol_timeout = 1000
+rx_consecutive_frame_timeout = 1000
 stmin = 1
 blocksize = 64
 use_stack_sleep_time = true
-loop_sleep_sec = 0.00001
+loop_sleep_sec = 0.001
 
 [logs]
 dir = "/app/data/logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
+loglevel = "INFO"
 
 [TextIn]
 path = "/app/data/text-in.json"
@@ -36,6 +38,7 @@ on_duplicate = "skip"
 
 [display]
 display-id = "front-display"
+animate = true
 
 # 0x000007E0 - ID для отправки для табло 64x128
 # 0x000007E8 - ответ о готовности.
@@ -44,6 +47,8 @@ display-id = "front-display"
 
 sender_tx_id = 0x000007E1
 sender_rx_id = 0x000007E9
+
+# Размеры табло в пикселях
 width = 192
 height = 64
 

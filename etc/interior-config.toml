@@ -54,6 +54,7 @@ dir = "../logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
+loglevel = "INFO"
 
 [TextIn]
 path = "../data/text-in.json"
@@ -69,6 +70,7 @@ on_duplicate = "skip"
 
 [display]
 display-id = "interior-display-1"
+animate = true
 
 # Первое
 # sender_tx_id = 0x000007E2

@@ -5,7 +5,7 @@
 # =============================================================================
 
 [can]
-channel = "vcan0"
+channel = "can0"
 bitrate = 500000
 
 [iso-tp]
@@ -21,6 +21,7 @@ dir = "/app/data/logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
+loglevel = "INFO"
 
 [TextIn]
 path = "/app/data/text-in.json"
@@ -36,6 +37,7 @@ on_duplicate = "skip"
 
 [display]
 display-id = "front-display"
+animate = true
 
 # 0x000007E0 - ID для отправки для табло 64x128
 # 0x000007E8 - ответ о готовности.

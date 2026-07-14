@@ -1,0 +1,20 @@
+services:
+  can-tablo-api:
+    image: can-tablo-driver:2-animate-antistorm
+    container_name: can-tablo-api
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: UTC
+      CAN_TABLO_HOME: /app
+      CAN_IFACE: can0
+      CAN_WAIT_SECONDS: "2"
+    volumes:
+      - /opt/can-tablo-driver/data:/app/data:rw
+      - /opt/can-tablo-driver/etc:/app/etc:rw
+      - /opt/can-tablo-driver/logs:/app/logs:rw
+    user: "1000:1000"
+    command: ["python", "run_api_server.py", "--config", "/app/etc/config.toml"]

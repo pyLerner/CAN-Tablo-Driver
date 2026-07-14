@@ -15,7 +15,7 @@
 | **Цвет на шине** | В посылке на табло передаётся **один байт** кода не-чёрного цвета (как в протоколе области); палитра в API — RGB по индексам 0–15, на физическом уровне в первую очередь используются согласованные оттенки (чёрный / жёлтый). |
 | **Статика и бегущая строка** | В секции `[display]` флаг **`animate`** (по умолчанию `true`): при `true` — как раньше, при переполнении ширины зоны выбирается **0x0002** (полная ширина текста для прокрутки на табло); при `false` — всегда **0x0001**, строка **усекается** по ширине внутренней области. |
 | **Маска в payload** | Битовая маска кодируется **по строкам** с выравниванием каждой строки до целого числа байт: `N = ceil(width/8) * height` (внутри байта — MSB-first, слева направо). |
-| **Отладочный лог текста** | В `[display]` флаг **`debug`**: при `true` в лог пишется текст по зонам — при `animate=true` полная строка, при `animate=false` — усечённый фрагмент, как на табло. |
+| **Уровень лога** | В `[logs]` ключ **`loglevel`**: `DEBUG` \| `INFO` \| `WARNING`. Текст по зонам пишется на уровне `DEBUG`. Устаревший `[display].debug`: `true`→`DEBUG`, `false`→`INFO` (если `loglevel` не задан; при обоих ключах побеждает `loglevel`). |
 | **Асинхронная отправка по CAN** | После успешного HTTP-ответа «принято» передача на шину выполняется в фоне, чтобы не блокировать event loop. |
 
 ---
@@ -47,8 +47,8 @@ flowchart TB
   Multi --> SocketCAN[SocketCAN]
 ```
 
-1. **`config.toml`** — канал шины, ISO-TP, логи, пути к JSON/шрифту, секция **`[display]`** (идентификатор табло, CAN ID, размер холста, опционально **`animate`** / **`debug`**, вложенная **`color_map`**) и таблицы **`[display.N]`** с разметкой зон. Те же ключи можно задать через **`POST .../config/set`** (см. [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md)).
-2. **REST** — частичное обновление настроек (`color-map`, `zones`, `animate`, `debug`) с **слиянием** в файл и в память; выдача текстов по зонам и постановка задачи отправки.
+1. **`config.toml`** — канал шины, ISO-TP, логи (`[logs].loglevel`), пути к JSON/шрифту, секция **`[display]`** (идентификатор табло, CAN ID, размер холста, опционально **`animate`**, legacy **`debug`**, вложенная **`color_map`**) и таблицы **`[display.N]`** с разметкой зон. Те же ключи можно задать через **`POST .../config/set`** (см. [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md)).
+2. **REST** — частичное обновление настроек (`color-map`, `zones`, `animate`, `loglevel`, `debug`) с **слиянием** в файл и в память; выдача текстов по зонам и постановка задачи отправки.
 3. **Рендеринг** — текст зоны → монохромное изображение (PIL) → битовая маска → заголовок 11 байт (op, x, y, w, h, color) + маска → **ISO-TP** на выбранную пару ID.
 4. **Приём / отладка** — режим `recv` (эмулятор контроллера) раскладывает payload обратно в PNG в каталог логов.
 
@@ -105,7 +105,8 @@ uv run pytest
 | `color-map` | object | Ключи `"0"`…`"15"`, значения: `{ "r", "g", "b" }` (0–255). |
 | `zones` | object | Ключи id зон (`"1"`…`"10"` и т.д.): `bg`, `fg`, `font`, `area` (x, y, w, h), `padding` (t, r, b, l). |
 | `animate` | bool | См. таблицу «Концепция»: поведение 0x0001 / 0x0002 и усечение при `false`. |
-| `debug` | bool | Логирование текста по зонам при отправке (полный или усечённый — см. выше). |
+| `loglevel` | string | `DEBUG` \| `INFO` \| `WARNING` — уровень логгера (`[logs].loglevel`). |
+| `debug` | bool | Устаревший алиас: `true`→`loglevel=DEBUG`, `false`→`INFO` (если в том же запросе нет `loglevel`). |
 
 | Код | Пример тела | Когда |
 |-----|-------------|--------|
@@ -195,13 +196,42 @@ uvicorn api_app:app --host 0.0.0.0 --port 8000
 1. Скопируйте пример конфигурации: `cp docker/etc/config.example.toml docker/etc/config.toml` и при необходимости отредактируйте CAN ID и зоны.
 2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs` — пути в `config.toml` должны совпадать с `/app/data/...` (см. пример).
 
-**Сборка и запуск**
+**Локальная сборка и запуск (dev)**
 
 ```bash
-docker compose up --build
+docker compose -f docker/docker-compose.yml up --build
 ```
 
-В [compose.yaml](compose.yaml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Интерфейс `can0` настраивается на хосте; внутри контейнера `iproute2` не используется.
+В [`docker/docker-compose.yml`](docker/docker-compose.yml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Интерфейс `can0` настраивается на хосте; внутри контейнера `iproute2` не используется.
+
+**Кросс-сборка образа и deploy bundle (x86 → RK3568 arm64)**
+
+На dev-машине (один раз: `docker buildx create --name cantablo-builder --use` и `docker run --privileged --rm tonistiigi/binfmt --install all`):
+
+```bash
+./docker/build-off-board.sh
+```
+
+Результат в `docker/`:
+
+- `can-tablo-driver-1-YYYYMMDD.tar.gz` — образ
+- `CanTabloDriverDockerApp-YYYYMMDD.tar.gz` — полный deploy bundle (образ + `can-tablo-driver/` + `install-docker-from-tar.sh`)
+
+**Сборка на плате (RK3568, native)**
+
+```bash
+./docker/build-rk3568.sh
+```
+
+**Установка на целевой плате из bundle**
+
+```bash
+tar -xzf CanTabloDriverDockerApp-YYYYMMDD.tar.gz -C /tmp/deploy
+cd /tmp/deploy/CanTabloDriverDockerApp-YYYYMMDD
+sudo ./install-docker-from-tar.sh --copy-to-opt --enable-service
+```
+
+Скрипт загружает образ, копирует конфигурацию в `/opt/can-tablo-driver`, устанавливает `can0-setup.service` на хосте и запускает контейнер. Только загрузка образа без запуска: добавьте `--no-up`.
 
 **Точка входа в образе**
 
@@ -209,7 +239,7 @@ docker compose up --build
 python run_api_server.py --config /app/etc/config.toml
 ```
 
-Конфиг монтируется с хоста: `./docker/etc` → `/app/etc`, данные: `./docker/data` → `/app/data`.
+Конфиг монтируется с хоста: `./docker/etc` → `/app/etc`, данные: `./docker/data` → `/app/data`. В production (bundle) тома указывают на `/opt/can-tablo-driver/{etc,data,logs}`.
 
 
 ---
@@ -287,25 +317,24 @@ curl -sS -X PUT "http://HOST:PORT/api/leddisplays/v1/values/update" \
 
 ---
 
-## Deploy через systemd
+## Deploy на плату (Docker)
 
-В проекте есть готовый скрипт [deploy-can-tablo.sh](deploy-can-tablo.sh), который:
-
-- обновляет код в `/home/teamhd/CAN-Tablo-Driver`;
-- устанавливает unit-файлы `can0-setup.service` и `led-tablo.service` в `/etc/systemd/system`;
-- включает автозапуск (`systemctl enable`) и перезапускает сервисы.
-
-Запуск:
+Сборка bundle на dev-машине: [`docker/build-off-board.sh`](docker/build-off-board.sh). Установка на целевой плате:
 
 ```bash
-sudo ./deploy-can-tablo.sh
+tar -xzf CanTabloDriverDockerApp-YYYYMMDD.tar.gz -C /tmp/deploy
+cd /tmp/deploy/CanTabloDriverDockerApp-YYYYMMDD
+sudo ./install-docker-from-tar.sh --copy-to-opt --enable-service
 ```
+
+Скрипт [`docker/install-docker-from-tar.sh`](docker/install-docker-from-tar.sh) (в bundle — `./install-docker-from-tar.sh`) загружает образ, копирует конфигурацию в `/opt/can-tablo-driver`, устанавливает `can0-setup.service` и запускает контейнер.
 
 Проверка после деплоя:
 
 ```bash
-systemctl --no-pager --full status can0-setup.service led-tablo.service
-journalctl -u can0-setup.service -u led-tablo.service -n 200 --no-pager
+systemctl --no-pager --full status can0-setup.service
+docker ps --filter name=can-tablo-api
+docker logs can-tablo-api --tail 50
 ip link show can0
 ```
 

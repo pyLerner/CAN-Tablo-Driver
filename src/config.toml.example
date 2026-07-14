@@ -25,6 +25,7 @@ dir = "../logs"       # каталог логов (по умолчанию: ./lo
 file = "tablo.log"    # имя файла (по умолчанию: tablo.log)
 count = 5             # число ротированных копий (по умолчанию: 5)
 max_size = 1048576    # размер до ротации, байт (по умолчанию: 1048576)
+loglevel = "INFO"     # DEBUG|INFO|WARNING (по умолчанию: INFO; legacy display.debug=true→DEBUG)
 
 # Входной JSON и шрифт по умолчанию.
 [TextIn]
@@ -46,7 +47,7 @@ on_duplicate = "skip"     # skip — не слать повтор; send — сл
 # [fonts]
 # 1 = "../data/DejaVuSans-Bold.ttf"
 
-# Одно табло: id, CAN, размер холста, animate/debug. Ключи sender_tx_id, sender_rx_id,
+# Одно табло: id, CAN, размер холста, animate. Ключи sender_tx_id, sender_rx_id,
 # width, height, display-id задаются только здесь — в коде значений по умолчанию нет.
 [display]
 display-id = "front-display"   # id для /api/ping (обязательно в [display])
@@ -55,7 +56,7 @@ sender_rx_id = 0x18EF1109      # 29-bit RX (обязательно)
 width = 192                    # ширина холста, px (обязательно; в MultiLedConfig до загрузки: 192)
 height = 64                    # высота холста, px (обязательно; в MultiLedConfig до загрузки: 64)
 animate = true                 # режим 0x0002 при переполнении / усечение при false (по умолчанию: true)
-debug = false                  # лог текста по зонам (по умолчанию: false)
+# debug = false                # устаревший алиас: true→logs.loglevel DEBUG, false→INFO
 
 # Зона: bg, fg, area, padding обязательны; font и text_scale_x можно опустить (см. умолчания).
 [display.1]

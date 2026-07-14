@@ -21,6 +21,7 @@ from led_config import (
     MultiLedConfig,
     load_multi_led_config,
     merge_config_file_with_updates,
+    parse_loglevel_name,
     write_merged_config_toml,
 )
 from send_scheduler import DisplaySendScheduler
@@ -74,6 +75,7 @@ class ConfigSetBody(BaseModel):
     bitrate: Optional[int] = None
     animate: Optional[bool] = None
     debug: Optional[bool] = None
+    loglevel: Optional[str] = None
 
 
 class ValuesUpdateBody(BaseModel):
@@ -124,6 +126,12 @@ def _config_set_body_to_toml_updates(body: ConfigSetBody) -> dict[str, Any]:
         if body.bitrate is not None:
             can["bitrate"] = body.bitrate
         upd["can"] = can
+
+    if body.loglevel is not None:
+        upd["logs"] = {"loglevel": parse_loglevel_name(body.loglevel)}
+    elif body.debug is not None:
+        # Совместимость: debug=true|false → loglevel DEBUG|INFO
+        upd["logs"] = {"loglevel": "DEBUG" if body.debug else "INFO"}
 
     display: dict[str, Any] = {}
     if body.color_map is not None:
@@ -187,6 +195,12 @@ def create_app(config_path: Optional[Path] = None) -> FastAPI:
         state.config = load_multi_led_config(state.config_path)
         if state.scheduler is not None:
             state.scheduler.update_config(state.config)
+        # Применить уровень логгера без перезапуска (debug / loglevel).
+        import logging
+
+        from main import LOGGER
+
+        LOGGER.setLevel(getattr(logging, state.config.log_level))
         return {"status": "ok"}
 
     @app.put("/api/leddisplays/v1/values/update")

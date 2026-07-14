@@ -4,8 +4,10 @@
 # Опционально: копирование can-tablo-driver → /opt/can-tablo-driver (как в docker-compose volumes).
 set -euo pipefail
 
-COMPOSE_REL_PATH="${COMPOSE_REL_PATH:-docker/docker-compose.yml}"
+COMPOSE_REL_PATH="${COMPOSE_REL_PATH:-}"
 DEFAULT_CONTAINER_NAME="${CONTAINER_NAME:-can-tablo-api}"
+OPT_TARGET="/opt/can-tablo-driver"
+SYSTEMD_UNIT="can0-setup.service"
 
 usage() {
   cat <<'EOF'
@@ -14,15 +16,16 @@ Usage: install-docker-from-tar.sh [options] [DEPLOY_DIR]
   DEPLOY_DIR — каталог с can-tablo-driver/ и can-tablo-driver*.tar.gz (по умолчанию: текущий).
 
 Options:
-  --copy-to-opt     Скопировать can-tablo-driver в /opt/can-tablo-driver (нужен root).
-  --no-up           Только docker load (и опционально --copy-to-opt), без compose up.
-  --tar FILE        Явный путь к .tar.gz; иначе ищется can-tablo-driver*.tar.gz в DEPLOY_DIR.
-  -h, --help        Справка.
+  --copy-to-opt       Скопировать can-tablo-driver в /opt/can-tablo-driver (нужен root).
+  --no-up             Только docker load (и опционально --copy-to-opt), без запуска.
+  --enable-service    После --copy-to-opt: установить can0-setup.service и включить на хосте.
+  --tar FILE          Явный путь к .tar.gz; иначе ищется can-tablo-driver*.tar.gz в DEPLOY_DIR.
+  -h, --help          Справка.
 
 Переменные окружения:
-  TAR_FILE          То же, что --tar.
-  CONTAINER_NAME    Имя контейнера для остановки перед обновлением (по умолчанию: can-tablo-api).
-  COMPOSE_REL_PATH  Путь к compose от корня проекта (по умолчанию: docker/docker-compose.yml).
+  TAR_FILE            То же, что --tar.
+  CONTAINER_NAME      Имя контейнера для остановки перед обновлением (по умолчанию: can-tablo-api).
+  COMPOSE_REL_PATH    Путь к compose от корня проекта (по умолчанию: авто — docker-compose.yml или docker/docker-compose.yml).
 
 Несколько файлов can-tablo-driver*.tar.gz: берётся самый новый по дате модификации.
 EOF
@@ -73,6 +76,20 @@ resolve_tar_path() {
   pick_newest_tar candidates || die "не удалось выбрать архив"
 }
 
+resolve_compose_rel_path() {
+  local root="$1"
+  if [[ -n "${COMPOSE_REL_PATH}" ]]; then
+    return 0
+  fi
+  if [[ -f "${root}/docker-compose.yml" ]]; then
+    COMPOSE_REL_PATH="docker-compose.yml"
+  elif [[ -f "${root}/docker/docker-compose.yml" ]]; then
+    COMPOSE_REL_PATH="docker/docker-compose.yml"
+  else
+    die "не найден compose в ${root} (ожидается docker-compose.yml или docker/docker-compose.yml)"
+  fi
+}
+
 stop_existing_container() {
   local name="$1"
   if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq "$name"; then
@@ -93,15 +110,42 @@ copy_project_to_opt() {
   local src="$1"
   [[ -d "$src" ]] || die "нет каталога: $src"
   need_cmd rsync
-  log "Копирование ${src} → /opt/can-tablo-driver …"
-  mkdir -p /opt/can-tablo-driver
-  rsync -a --delete "${src}/" /opt/can-tablo-driver/
+  log "Копирование ${src} → ${OPT_TARGET} …"
+  mkdir -p "${OPT_TARGET}"
+  rsync -a --delete "${src}/" "${OPT_TARGET}/"
+  mkdir -p "${OPT_TARGET}/logs"
+  chown -R 1000:1000 "${OPT_TARGET}/logs"
+}
+
+disable_legacy_units() {
+  systemctl disable led-tablo.service 2>/dev/null || true
+  rm -f /etc/systemd/system/led-tablo.service
+}
+
+enable_service_on_host() {
+  local unit_src="${OPT_TARGET}/systemd/${SYSTEMD_UNIT}"
+  [[ -f "$unit_src" ]] || die "не найден unit: ${unit_src}"
+
+  need_cmd systemctl
+  log "Установка ${SYSTEMD_UNIT}…"
+  disable_legacy_units
+  cp "$unit_src" "/etc/systemd/system/${SYSTEMD_UNIT}"
+  systemctl daemon-reload
+  systemctl enable "${SYSTEMD_UNIT}"
+  systemctl start "${SYSTEMD_UNIT}" 2>/dev/null || true
+}
+
+start_stack() {
+  local project_root="$1"
+  log "Запуск stack в ${project_root} …"
+  ( cd "$project_root" && docker compose -f "$COMPOSE_REL_PATH" up -d --no-build )
 }
 
 main() {
   local deploy_dir=""
   local copy_to_opt=0
   local no_up=0
+  local enable_service=0
   local tar_explicit=""
 
   while [[ $# -gt 0 ]]; do
@@ -116,6 +160,10 @@ main() {
         ;;
       --no-up)
         no_up=1
+        shift
+        ;;
+      --enable-service)
+        enable_service=1
         shift
         ;;
       --tar)
@@ -155,8 +203,21 @@ main() {
       die "для --copy-to-opt запустите от root: sudo $0 ..."
     fi
     copy_project_to_opt "$src_project"
-    project_root="/opt/can-tablo-driver"
+    project_root="${OPT_TARGET}"
+    if (( enable_service )); then
+      enable_service_on_host
+    else
+      log "Подсказка: для production на хосте выполните:"
+      log "  sudo cp ${OPT_TARGET}/systemd/${SYSTEMD_UNIT} /etc/systemd/system/"
+      log "  sudo systemctl daemon-reload"
+      log "  sudo systemctl enable --now ${SYSTEMD_UNIT}"
+      log "или переустановите с флагом --enable-service"
+    fi
+  elif (( enable_service )); then
+    die "--enable-service требует --copy-to-opt"
   fi
+
+  resolve_compose_rel_path "${project_root}"
 
   local compose_file="${project_root}/${COMPOSE_REL_PATH}"
   [[ -f "$compose_file" ]] || die "не найден compose: $compose_file (COMPOSE_REL_PATH=${COMPOSE_REL_PATH})"
@@ -172,8 +233,7 @@ main() {
     exit 0
   fi
 
-  log "Запуск stack в ${project_root} …"
-  ( cd "$project_root" && docker compose -f "$COMPOSE_REL_PATH" up -d --no-build )
+  start_stack "$project_root"
   log "Готово."
 }
 

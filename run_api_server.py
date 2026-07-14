@@ -45,6 +45,7 @@ def main() -> None:
         filename=cfg.log_filename,
         max_bytes=cfg.log_max_bytes,
         backup_count=cfg.log_backup_count,
+        level=cfg.log_level,
     )
     LOGGER.info(
         "Запуск HTTP API, config=%s host=%s port=%s",

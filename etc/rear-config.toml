@@ -53,6 +53,7 @@ dir = "../logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
+loglevel = "INFO"
 
 [TextIn]
 path = "../data/text-in.json"
@@ -68,6 +69,7 @@ on_duplicate = "skip"
 
 [display]
 display-id = "rear-display"
+animate = true
 
 # Задний маршрутоуказатель
 sender_tx_id = 0x000007E0
