@@ -5,7 +5,6 @@
 # =============================================================================
 
 [can]
-#channel = "vcan0"
 channel = "can0"
 bitrate = 500000
 
@@ -22,7 +21,7 @@ dir = "/app/data/logs"
 file = "tablo.log"
 count = 5
 max_size = 1048576
-loglevel = "INFO"
+loglevel = "DEBUG"  # INFO
 
 [TextIn]
 path = "/app/data/text-in.json"

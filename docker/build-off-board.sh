@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DOCKER_DIR="${SCRIPT_DIR}"
-IMAGE_TAG="${IMAGE_TAG:-can-tablo-driver:latest}"
+IMAGE_TAG="${IMAGE_TAG:-can-tablo-driver:3-animate-antistorm}"
 EXPORT_TAR_DEFAULT="${DOCKER_DIR}/can-tablo-driver-1-$(date +%Y%m%d).tar.gz"
 BUNDLE_DIR_NAME="${BUNDLE_DIR_NAME:-CanTabloDriverDockerApp}"
 BUNDLE_TAR_DEFAULT="${DOCKER_DIR}/${BUNDLE_DIR_NAME}-$(date +%Y%m%d).tar.gz"
