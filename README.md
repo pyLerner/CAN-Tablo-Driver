@@ -2,7 +2,7 @@
 
 Сервис управления LED-табло по **CAN** с транспортом **ISO-TP** (29-bit идентификаторы). Один процесс на узле соответствует **одному контроллеру и одному физическому табло**: разметка экрана задаётся **зонами**, строки для зон приходят по **REST API**, конфигурация хранится в **TOML**.
 
-Подробный контракт HTTP для интеграторов: [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md). Документы V1 сохранены для совместимости: [docs/API_LEDDISPLAYS_V1.md](docs/API_LEDDISPLAYS_V1.md), [docs/API_LEDDISPLAYS_V1_EXTERNAL.md](docs/API_LEDDISPLAYS_V1_EXTERNAL.md).
+Подробный контракт HTTP для интеграторов: [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md). Журнал изменений: [CHANGELOG.md](CHANGELOG.md). Документы V1 сохранены для совместимости: [docs/API_LEDDISPLAYS_V1.md](docs/API_LEDDISPLAYS_V1.md), [docs/API_LEDDISPLAYS_V1_EXTERNAL.md](docs/API_LEDDISPLAYS_V1_EXTERNAL.md).
 
 ---
 
@@ -12,9 +12,11 @@
 |------|----------|
 | **Один контроллер — одно табло** | Не описываем несколько независимых табло в одном конфиге маршрутного типа; одна пара `sender_tx_id` / `sender_rx_id`, один холст `width`×`height`. |
 | **Зоны** | Каждая зона имеет `area` (x, y, w, h), отступы `padding`, индексы цветов `fg`/`bg` в палитре `color-map`, индекс шрифта. Какие зоны активны, задаёт конфиг (`[display.1]`, `[display.2]`, …). |
-| **Цвет на шине** | В посылке на табло передаётся **один байт** кода не-чёрного цвета (как в протоколе области); палитра в API — RGB по индексам 0–15, на физическом уровне в первую очередь используются согласованные оттенки (чёрный / жёлтый). |
-| **Статика и бегущая строка** | Для каждой области выбирается операция **0x0001** (текст помещается в окно) или **0x0002** (растр полной ширины текста для прокрутки на стороне табло). |
-| **Асинхронная отправка по CAN** | После успешного HTTP-ответа «принято» передача на шину выполняется в фоне, чтобы не блокировать event loop. |
+| **Цвет на шине** | В посылке на табло передаётся **один байт** кода не-чёрного цвета (как в протоколе области); палитра в API — RGB по индексам 0–15; на проводе учитываются чёрный / жёлтый / белый / базовые RGB. |
+| **Статика и бегущая строка** | В `[display]` флаг **`animate`** (по умолчанию `true`): при `true` — `0x0001` или `0x0002` при переполнении; при `false` — всегда **0x0001**, текст **усекается** по ширине зоны. |
+| **Маска в payload** | Непрерывный поток битов: `N = ceil(width × height / 8)`. Строки идут подряд (row-major); при ширине не кратной 8 следующая строка может начинаться **внутри** байта. Внутри байта — MSB-first; неиспользуемые биты только в хвосте всей маски. |
+| **Антишторм** | Секция `[send]`: coalesce (last-write-wins), `on_duplicate` (`skip`/`send`), `min_interval` между успешными отправками. |
+| **Асинхронная отправка по CAN** | После HTTP `accepted` передача идёт через `DisplaySendScheduler` в фоне. |
 
 ---
 
@@ -25,6 +27,7 @@ flowchart TB
   subgraph cfg [Конфигурация]
     TOML[config.toml]
     TOML --> Display["[display] + [display.N]"]
+    TOML --> SendCfg["[send]"]
     TOML --> CANcfg["[can], [iso-tp]"]
   end
   subgraph http [HTTP]
@@ -33,22 +36,26 @@ flowchart TB
     FastAPI --> ValuesPut["PUT .../values/update"]
   end
   subgraph core [Ядро отправки]
+    Sched[DisplaySendScheduler]
     Render[TextRenderer TTF]
-    Mask[RectMaskPacket bitmask]
+    Mask[RectMaskPacket continuous mask]
     Multi[MultiIsoTpTransport]
-    Render --> Mask --> Multi
+    Sched --> Render --> Mask --> Multi
   end
   ConfigSet --> TOML
-  ValuesPut --> core
-  Display --> core
+  ValuesPut --> Sched
+  Display --> Sched
+  SendCfg --> Sched
   CANcfg --> Multi
   Multi --> SocketCAN[SocketCAN]
 ```
 
-1. **`config.toml`** — канал шины, ISO-TP, логи, пути к JSON/шрифту, секция **`[display]`** (идентификатор табло, CAN ID, размер холста, вложенная **`color_map`**) и таблицы **`[display.N]`** с разметкой зон.
-2. **REST** — частичное обновление настроек (`color-map`, `zones`) с **слиянием** в файл и в память; выдача текстов по зонам и постановка задачи отправки.
-3. **Рендеринг** — текст зоны → монохромное изображение (PIL) → битовая маска → заголовок 11 байт (op, x, y, w, h, color) + маска → **ISO-TP** на выбранную пару ID.
-4. **Приём / отладка** — режим `recv` (эмулятор контроллера) раскладывает payload обратно в PNG в каталог логов.
+1. **`config.toml`** — канал шины, ISO-TP, логи (`[logs].loglevel`), **`[send]`**, секция **`[display]`** (`display-id`, CAN ID, `width`/`height`, опционально **`animate`**, **`debug`**, **`color_map`**) и **`[display.N]`**.
+2. **REST** — частичное обновление (`color-map`, `zones`, `animate`, `loglevel`, `debug`) со слиянием; `PUT .../values/update` → очередь scheduler.
+3. **Рендеринг** — текст зоны → монохромное изображение (PIL) → непрерывная битовая маска → заголовок 11 байт + маска → **ISO-TP**.
+4. **Приём / отладка** — режим `recv` раскладывает payload в PNG в каталог логов.
+
+История изменений: [CHANGELOG.md](CHANGELOG.md).
 
 Зависимости (ориентир): `python-can`, `can-isotp`, `Pillow`, `FastAPI`, `uvicorn`, `tomli` / `tomli-w`.
 
@@ -91,6 +98,9 @@ flowchart TB
 |-----------|-----|----------|
 | `color-map` | object | Ключи `"0"`…`"15"`, значения: `{ "r", "g", "b" }` (0–255). |
 | `zones` | object | Ключи id зон (`"1"`…`"10"` и т.д.): `bg`, `fg`, `font`, `area` (x, y, w, h), `padding` (t, r, b, l). |
+| `animate` | bool | См. таблицу «Концепция»: при `false` — статика и усечение. |
+| `loglevel` | string | `DEBUG` \| `INFO` \| `WARNING` — уровень логгера. |
+| `debug` | bool | Legacy: `true`→`DEBUG`, `false`→`INFO` (если нет `loglevel`). |
 
 | Код | Пример тела | Когда |
 |-----|-------------|--------|
@@ -101,7 +111,7 @@ flowchart TB
 
 ### `PUT /api/leddisplays/v1/values/update`
 
-Задать текст для зон и инициировать **асинхронную** отправку на табло, настроенное в `config.toml`.
+Задать текст для зон и поставить задачу в **scheduler** (coalesce / dedup / `min_interval` из `[send]`).
 
 | Поле тела | Тип | Описание |
 |-----------|-----|----------|
@@ -267,7 +277,7 @@ curl -sS -X PUT "http://HOST:PORT/api/leddisplays/v1/values/update" \
 | 6 | 2 | `width` |
 | 8 | 2 | `height` |
 | 10 | 1 | код цвета для ненулевых битов маски |
-| 11 | N | битовая маска, строка за строкой (MSB-first в байте) |
+| 11 | N | битовая маска: `ceil(width×height/8)` байт, непрерывный поток битов (MSB-first) |
 
 Подробнее см. модуль [src/main.py](src/main.py) (комментарий в начале файла).
 
@@ -276,7 +286,19 @@ curl -sS -X PUT "http://HOST:PORT/api/leddisplays/v1/values/update" \
 ## Конфигурация
 
 - Скопируйте [src/config.toml.example](src/config.toml.example) в `config.toml` и задайте реальные CAN ID, размеры и зоны.
-- Структура табло: секция **`[display]`** с обязательным **`display-id`**, `sender_tx_id`, `sender_rx_id`, `width`, `height`, вложенная **`color_map`** и таблицы **`[display.1]`**, **`[display.2]`**, … (см. [src/config.toml.example](src/config.toml.example) и [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md)).
+- Структура табло: секция **`[display]`** с обязательным **`display-id`**, `sender_tx_id`, `sender_rx_id`, `width`, `height`, опционально **`animate`**, **`debug`**, вложенная **`color_map`** и таблицы **`[display.1]`**, … (см. [src/config.toml.example](src/config.toml.example) и [docs/API_LEDDISPLAYS_V2.md](docs/API_LEDDISPLAYS_V2.md)).
+- Секция **`[send]`**:
+
+```toml
+[send]
+min_interval = 300
+on_duplicate = "skip"   # или "send"
+```
+
+| Ключ | Описание |
+|------|----------|
+| `min_interval` | Минимум мс между успешными отправками на CAN (`0` — без задержки). |
+| `on_duplicate` | `skip` — не слать повтор с теми же `values`; `send` — слать всегда. |
 
 ---
 
