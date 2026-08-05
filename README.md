@@ -173,28 +173,36 @@ uvicorn api_app:app --host 0.0.0.0 --port 8000
 
 ## Docker (Compose)
 
-Образ: минимальный `debian:bookworm-slim`, зависимости через `uv sync --frozen`, рабочий каталог `/opt/can-tablo`, часовой пояс **UTC**, процесс под пользователем UID 1000.
+Образ: минимальный `debian:bookworm-slim`, зависимости через `uv sync --frozen`, тег **`can-tablo-driver:2-static-antistorm`**, часовой пояс **UTC**, процесс под UID 1000.
+
+В [`docker/etc/config.toml`](docker/etc/config.toml): `animate = false`, `debug = true`, секция `[send]` (`min_interval = 300`, `on_duplicate = "skip"`). Упаковка маски — непрерывная (не по границам байта строки).
 
 **Подготовка**
 
 1. Скопируйте пример конфигурации: `cp docker/etc/config.example.toml docker/etc/config.toml` и при необходимости отредактируйте CAN ID и зоны.
-2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs` — пути в `config.toml` должны совпадать с `/opt/can-tablo/data/...` (см. пример).
+2. В `docker/data/` положите `text-in.json`, шрифт (например `DejaVuSans.ttf`) и при необходимости создайте каталог `logs`.
 
-**Сборка и запуск**
+**Локальный запуск**
 
 ```bash
-docker compose up --build
+docker compose -f docker/docker-compose.yml up --build
 ```
 
-В [compose.yaml](compose.yaml) по умолчанию включён `network_mode: host` (SocketCAN на Linux). Дополнительные группы (`dialout`) и проброс `/dev/...` настройте под вашу систему (комментарии в файле).
+**Сборка deploy bundle (dev → RK3568 arm64)**
 
-**Точка входа в образе**
-
-```text
-uv run --no-sync run_api_server --config /opt/can-tablo/etc/config.toml
+```bash
+./docker/build-off-board.sh
 ```
 
-Конфиг монтируется с хоста: `./docker/etc` → `/opt/can-tablo/etc` (только чтение), данные: `./docker/data` → `/opt/can-tablo/data`.
+На выходе: образ `can-tablo-driver:2-static-antistorm` и `CanTabloDriverDockerApp-YYYYMMDD.tar.gz` (образ + `can-tablo-driver/` + `install-old-docker.sh`).
+
+**Установка на плате (docker-compose v1)**
+
+```bash
+sudo ./install-old-docker.sh --copy-to-opt --enable-service
+```
+
+Скрипт [`docker/install-old-docker.sh`](docker/install-old-docker.sh) предпочитает бинарник `docker-compose` (v1); при его отсутствии — fallback на `docker compose`.
 
 
 ---

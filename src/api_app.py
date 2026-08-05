@@ -4,11 +4,11 @@ REST API (FastAPI): конфигурация зон и обновление ст
 
 from __future__ import annotations
 
-import asyncio
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 _SRC = Path(__file__).resolve().parent
 if str(_SRC) not in sys.path:
@@ -21,9 +21,10 @@ from led_config import (
     MultiLedConfig,
     load_multi_led_config,
     merge_config_file_with_updates,
+    parse_loglevel_name,
     write_merged_config_toml,
 )
-from led_service import send_display_values
+from send_scheduler import DisplaySendScheduler
 
 DEFAULT_CONFIG_PATH = _SRC / "config.toml"
 
@@ -72,6 +73,9 @@ class ConfigSetBody(BaseModel):
     zones: Optional[dict[str, ZoneBody]] = None
     channel: Optional[str] = None
     bitrate: Optional[int] = None
+    animate: Optional[bool] = None
+    debug: Optional[bool] = None
+    loglevel: Optional[str] = None
 
 
 class ValuesUpdateBody(BaseModel):
@@ -123,6 +127,12 @@ def _config_set_body_to_toml_updates(body: ConfigSetBody) -> dict[str, Any]:
             can["bitrate"] = body.bitrate
         upd["can"] = can
 
+    if body.loglevel is not None:
+        upd["logs"] = {"loglevel": parse_loglevel_name(body.loglevel)}
+    elif body.debug is not None:
+        # Совместимость: debug=true|false → loglevel DEBUG|INFO
+        upd["logs"] = {"loglevel": "DEBUG" if body.debug else "INFO"}
+
     display: dict[str, Any] = {}
     if body.color_map is not None:
         display["color_map"] = {
@@ -131,6 +141,10 @@ def _config_set_body_to_toml_updates(body: ConfigSetBody) -> dict[str, Any]:
     if body.zones is not None:
         for zk, zv in body.zones.items():
             display[str(zk)] = _zone_body_to_toml(zv)
+    if body.animate is not None:
+        display["animate"] = body.animate
+    if body.debug is not None:
+        display["debug"] = body.debug
     if display:
         upd["display"] = display
     return upd
@@ -141,13 +155,25 @@ class AppState:
         self.config_path = config_path
         self.config: MultiLedConfig = load_multi_led_config(config_path)
         self.last_values: dict[str, str] = {}
+        self.scheduler: Optional[DisplaySendScheduler] = None
 
 
 def create_app(config_path: Optional[Path] = None) -> FastAPI:
     path = config_path or DEFAULT_CONFIG_PATH
     state = AppState(path)
 
-    app = FastAPI(title="LED displays CAN service", version="2")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        scheduler = DisplaySendScheduler(state.config)
+        state.scheduler = scheduler
+        scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
+            state.scheduler = None
+
+    app = FastAPI(title="LED displays CAN service", version="2", lifespan=lifespan)
 
     @app.get("/api/ping", response_model=PingResponse, response_model_by_alias=True)
     def ping() -> PingResponse:
@@ -167,16 +193,21 @@ def create_app(config_path: Optional[Path] = None) -> FastAPI:
         merged = merge_config_file_with_updates(state.config_path, updates)
         write_merged_config_toml(state.config_path, merged)
         state.config = load_multi_led_config(state.config_path)
+        if state.scheduler is not None:
+            state.scheduler.update_config(state.config)
+        # Применить уровень логгера без перезапуска (debug / loglevel).
+        import logging
+
+        from main import LOGGER
+
+        LOGGER.setLevel(getattr(logging, state.config.log_level))
         return {"status": "ok"}
 
     @app.put("/api/leddisplays/v1/values/update")
     async def values_update(body: ValuesUpdateBody) -> dict[str, str]:
         state.last_values = dict(body.values)
-
-        async def _job() -> None:
-            await asyncio.to_thread(send_display_values, state.config, state.last_values)
-
-        asyncio.create_task(_job())
+        if state.scheduler is not None:
+            state.scheduler.submit(body.values)
         return {"status": "accepted"}
 
     return app

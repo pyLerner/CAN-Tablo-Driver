@@ -182,7 +182,13 @@ def bitmask_size(width: int, height: int) -> int:
     return math.ceil((width * height) / 8)
 
 
-def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: int) -> None:
+def setup_logging(
+    log_dir: Path,
+    filename: str,
+    max_bytes: int,
+    backup_count: int,
+    level: str = "INFO",
+) -> None:
     """
     Настраивает логирование в файл с ротацией.
 
@@ -191,6 +197,7 @@ def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: in
         filename: Имя основного файла лога.
         max_bytes: Максимальный размер файла до ротации.
         backup_count: Количество архивных файлов.
+        level: Уровень логгера (DEBUG|INFO|WARNING|…).
     """
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / filename
@@ -211,7 +218,7 @@ def setup_logging(log_dir: Path, filename: str, max_bytes: int, backup_count: in
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    LOGGER.setLevel(logging.INFO)
+    LOGGER.setLevel(getattr(logging, str(level).upper(), logging.INFO))
     LOGGER.handlers.clear()
     LOGGER.addHandler(rotating_handler)
     LOGGER.addHandler(console_handler)
@@ -371,6 +378,39 @@ class TextRenderer:
             text, region_height, pad, horizontal_scale, font_path=font_path
         )
         return layer.width
+
+    def truncate_text_to_width(
+        self,
+        text: str,
+        region_height: int,
+        pad: int,
+        max_width: int,
+        horizontal_scale: float = 1.0,
+        font_path: Optional[str] = None,
+    ) -> str:
+        """
+        Возвращает максимальный по длине префикс ``text``, который помещается в ``max_width`` пикселей.
+
+        Пустая строка, если ``max_width`` <= 0. Подбор по длине префикса (символы Unicode).
+        """
+        if max_width <= 0:
+            return ""
+        if not text:
+            return ""
+        if self.measure_text_width(text, region_height, pad, horizontal_scale, font_path) <= max_width:
+            return text
+        lo, hi = 0, len(text)
+        best = ""
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            prefix = text[:mid]
+            w = self.measure_text_width(prefix, region_height, pad, horizontal_scale, font_path)
+            if w <= max_width:
+                best = prefix
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best
 
     def render_left_aligned(
         self,
@@ -948,7 +988,7 @@ class ZonedDisplayTablo(AbstractTablo):
 
         for zid in zids:
             z = zones[zid]
-            text = values.get(zid, "")
+            text_raw = values.get(zid, "")
             pt, pr, pb, pl = z.padding.t, z.padding.r, z.padding.b, z.padding.l
             inner_w = max(1, z.area.w - pl - pr)
             inner_h = max(1, z.area.h - pt - pb)
@@ -956,9 +996,37 @@ class ZonedDisplayTablo(AbstractTablo):
             y0 = z.area.y + pt
             text_pad = min(pt, pb, max(0, inner_h // 2 - 1))
             wire = rgb_index_to_wire_byte(z.fg, self._cfg.color_map, "fg")
-            force_scroll = global_w_overflow and zid in rightmost
+            animate = self._cfg.animate
+            force_scroll = animate and (global_w_overflow and zid in rightmost)
+
+            if not animate:
+                text = self.renderer.truncate_text_to_width(
+                    text_raw,
+                    inner_h,
+                    text_pad,
+                    inner_w,
+                    horizontal_scale=z.text_scale_x,
+                    font_path=font1,
+                )
+                LOGGER.debug("zone %s text (static, truncated): %r", zid, text)
+                self.render_region(
+                    text,
+                    x0,
+                    y0,
+                    inner_w,
+                    inner_h,
+                    color_non_black=wire,
+                    horizontal_scale=z.text_scale_x,
+                    scroll_if_overflow=False,
+                    text_pad=text_pad,
+                    force_scroll=False,
+                    font_path=font1,
+                )
+                continue
+
+            LOGGER.debug("zone %s text (animate, full): %r", zid, text_raw)
             self.render_region(
-                text,
+                text_raw,
                 x0,
                 y0,
                 inner_w,
@@ -1154,6 +1222,7 @@ if __name__ == "__main__":
             filename=_cfg.log_filename,
             max_bytes=_cfg.log_max_bytes,
             backup_count=_cfg.log_backup_count,
+            level=_cfg.log_level,
         )
         LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
         run_sender(config_path)
@@ -1166,6 +1235,7 @@ if __name__ == "__main__":
             filename=_cfg.log_filename,
             max_bytes=_cfg.log_max_bytes,
             backup_count=_cfg.log_backup_count,
+            level=_cfg.log_level,
         )
         LOGGER.info("Запуск режима=%s, config=%s", args.mode, config_path)
         run_api_server(_cfg)

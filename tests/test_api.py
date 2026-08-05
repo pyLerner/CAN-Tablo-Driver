@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +19,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(SRC / "config.toml"))
+    mock_scheduler = MagicMock()
+    mock_scheduler.stop = AsyncMock()
+    with patch("api_app.DisplaySendScheduler", return_value=mock_scheduler):
+        with TestClient(create_app(SRC / "config.toml")) as c:
+            c._mock_scheduler = mock_scheduler  # type: ignore[attr-defined]
+            yield c
 
 
 def test_ping(client: TestClient) -> None:
@@ -32,20 +37,40 @@ def test_ping(client: TestClient) -> None:
     assert data["display-id"] == "front-display"
 
 
-@patch("api_app.send_display_values")
-def test_values_update_accepted(_mock_send: object, client: TestClient) -> None:
+def test_values_update_accepted(client: TestClient) -> None:
     r = client.put(
         "/api/leddisplays/v1/values/update",
         json={"values": {"1": "567А"}},
     )
     assert r.status_code == 200
     assert r.json()["status"] == "accepted"
+    client._mock_scheduler.submit.assert_called_once_with({"1": "567А"})  # type: ignore[attr-defined]
 
 
 def test_config_set_noop_empty_body(client: TestClient) -> None:
     r = client.post("/api/leddisplays/v1/config/set", json={})
     assert r.status_code == 200
     assert r.json()["status"] == "noop"
+
+
+def test_config_set_body_maps_animate_debug() -> None:
+    from api_app import ConfigSetBody, _config_set_body_to_toml_updates
+
+    body = ConfigSetBody(animate=False, debug=True)
+    upd = _config_set_body_to_toml_updates(body)
+    assert upd["display"]["animate"] is False
+    assert upd["display"]["debug"] is True
+    # debug без loglevel → logs.loglevel DEBUG (совместимость)
+    assert upd["logs"]["loglevel"] == "DEBUG"
+
+
+def test_config_set_body_loglevel_wins_over_debug() -> None:
+    from api_app import ConfigSetBody, _config_set_body_to_toml_updates
+
+    body = ConfigSetBody(debug=True, loglevel="WARNING")
+    upd = _config_set_body_to_toml_updates(body)
+    assert upd["logs"]["loglevel"] == "WARNING"
+    assert upd["display"]["debug"] is True
 
 
 def test_led_config_merge() -> None:

@@ -197,6 +197,8 @@ def _is_zone_key(key: str) -> bool:
         "height",
         "color_map",
         "color",
+        "animate",
+        "debug",
     ):
         return False
     return key.isdigit()
@@ -238,6 +240,49 @@ def _load_font_paths(base_dir: Path, text_in_font: Path, raw: dict[str, Any]) ->
     return paths
 
 
+SendOnDuplicate = Literal["skip", "send"]
+LogLevelName = Literal["DEBUG", "INFO", "WARNING"]
+
+_VALID_LOGLEVELS = frozenset({"DEBUG", "INFO", "WARNING"})
+
+
+def _parse_send_on_duplicate(raw: Any) -> SendOnDuplicate:
+    value = str(raw).strip().lower()
+    if value not in ("skip", "send"):
+        raise ValueError(f"[send].on_duplicate должен быть 'skip' или 'send', получено: {raw!r}")
+    return value  # type: ignore[return-value]
+
+
+def parse_loglevel_name(raw: Any) -> LogLevelName:
+    """Парсит имя уровня лога; допустимы DEBUG|INFO|WARNING (регистр не важен)."""
+    name = str(raw).strip().upper()
+    if name not in _VALID_LOGLEVELS:
+        raise ValueError(
+            f"[logs].loglevel должен быть DEBUG|INFO|WARNING, получено: {raw!r}"
+        )
+    return name  # type: ignore[return-value]
+
+
+def resolve_log_level(
+    loglevel_raw: Any | None,
+    *,
+    debug: bool | None = None,
+    debug_key_present: bool = False,
+) -> LogLevelName:
+    """
+    Итоговый уровень логгера.
+
+    1. Явный [logs].loglevel, если задан и валиден.
+    2. Иначе display.debug: true→DEBUG, false→INFO (если ключ debug был в конфиге).
+    3. Иначе INFO.
+    """
+    if loglevel_raw is not None and str(loglevel_raw).strip() != "":
+        return parse_loglevel_name(loglevel_raw)
+    if debug_key_present:
+        return "DEBUG" if bool(debug) else "INFO"
+    return "INFO"
+
+
 @dataclass
 class MultiLedConfig:
     """Полная конфигурация сервиса (одно табло)."""
@@ -265,6 +310,11 @@ class MultiLedConfig:
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
     color_map: dict[str, tuple[int, int, int]] = field(default_factory=default_color_map)
     font_paths: dict[int, Path] = field(default_factory=dict)
+    animate: bool = True
+    debug: bool = False
+    log_level: LogLevelName = "INFO"
+    send_min_interval_ms: int = 0
+    send_on_duplicate: SendOnDuplicate = "skip"
 
 
 def load_multi_led_config(config_path: Path) -> MultiLedConfig:
@@ -277,6 +327,7 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
     logs_cfg = raw.get("logs", {})
     text_in_cfg = raw.get("TextIn", {})
     api_sec = raw.get("api-server", {})
+    send_cfg = raw.get("send", {})
     display_sec = raw.get("display")
 
     iso_tp_params = {
@@ -306,6 +357,8 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
         api_server_host=str(api_sec.get("host", "0.0.0.0")),
         api_server_port=int(api_sec.get("port", 8000)),
         font_paths=font_paths,
+        send_min_interval_ms=max(0, int(send_cfg.get("min_interval", 0))),
+        send_on_duplicate=_parse_send_on_duplicate(send_cfg.get("on_duplicate", "skip")),
     )
 
     if not isinstance(display_sec, dict):
@@ -318,6 +371,15 @@ def load_multi_led_config(config_path: Path) -> MultiLedConfig:
     cfg.display_height = int(display_sec["height"])
     cfg.color_map = _parse_color_map_from_display(display_sec)
     cfg.zones = _load_zones_from_display(display_sec)
+    cfg.animate = bool(display_sec.get("animate", True))
+    debug_key_present = "debug" in display_sec
+    cfg.debug = bool(display_sec["debug"]) if debug_key_present else False
+    loglevel_raw = logs_cfg.get("loglevel") if "loglevel" in logs_cfg else None
+    cfg.log_level = resolve_log_level(
+        loglevel_raw,
+        debug=cfg.debug if debug_key_present else None,
+        debug_key_present=debug_key_present,
+    )
 
     return cfg
 
@@ -359,6 +421,8 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
         "sender_rx_id": cfg.sender_rx_id,
         "width": cfg.display_width,
         "height": cfg.display_height,
+        "animate": cfg.animate,
+        "debug": cfg.debug,
         "color_map": _color_map_to_nested(cfg.color_map),
     }
     for zid, zone in sorted(cfg.zones.items(), key=lambda x: int(x[0])):
@@ -386,6 +450,7 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
             "file": cfg.log_filename,
             "count": cfg.log_backup_count,
             "max_size": cfg.log_max_bytes,
+            "loglevel": cfg.log_level,
         },
         "TextIn": {
             "path": _short_path(cfg.text_in_path, base),
@@ -395,6 +460,10 @@ def multi_led_config_to_toml_dict(cfg: MultiLedConfig) -> dict[str, Any]:
         "api-server": {
             "host": cfg.api_server_host,
             "port": cfg.api_server_port,
+        },
+        "send": {
+            "min_interval": cfg.send_min_interval_ms,
+            "on_duplicate": cfg.send_on_duplicate,
         },
     }
     if fonts_out:

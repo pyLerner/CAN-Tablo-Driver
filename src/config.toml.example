@@ -29,6 +29,10 @@ font = "../data/DejaVuSans.ttf"
 host = "0.0.0.0"
 port = 8000
 
+[send]
+min_interval = 300
+on_duplicate = "skip"
+
 # Опционально: явный путь TTF для индекса шрифта 1 (иначе — DejaVuSans-Bold.ttf
 # рядом с [TextIn].font, иначе тот же файл, что и font).
 # [fonts]
@@ -36,6 +40,8 @@ port = 8000
 
 [display]
 display-id = "front-display"
+animate = false
+debug = true
 sender_tx_id = 0x18EF1001
 sender_rx_id = 0x18EF1109
 width = 192
